@@ -1,6 +1,6 @@
 # 🧱 Voxel Engine com Three.js
 
-Este é um projeto de uma **Voxel Engine** feito em **JavaScript puro**, utilizando **Three.js** para renderização 3D. O motor é inspirado em jogos como Minecraft e visa performance, modularidade e geração procedural.
+Este é um projeto de uma **Voxel Engine** feito em **JavaScript puro**, utilizando **Three.js** para renderização 3D.
 
  **Este projeto ainda está em desenvolvimento.**
 
@@ -39,5 +39,8 @@ Este é um projeto de uma **Voxel Engine** feito em **JavaScript puro**, utiliza
 ## Como executar
 
 ```bash
-  
+  git clone https://github.com/otavio-rb/voxel.js.git
+  cd voxel.js
+  npm i
+  npm run dev
 ```
