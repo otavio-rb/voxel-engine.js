@@ -1,5 +1,7 @@
 # 🧱 Voxel Engine com Three.js
 
+[Live demo](https://cursoredes-bf3ec.web.app/)
+
 Este é um projeto de uma **Voxel Engine** feito em **JavaScript puro**, utilizando **Three.js** para renderização 3D.
 
  **Este projeto ainda está em desenvolvimento.**
