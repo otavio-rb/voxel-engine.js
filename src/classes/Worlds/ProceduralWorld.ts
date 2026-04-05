@@ -20,7 +20,7 @@ import RNG from '../../utils/rng';
 import Sky from '../Sky';
 import WorkerPool from './WorkerPool';
 import ChunkGeometry from '../Chunk/ChunkGeometry';
-import { BlocksMap, ChunkDataResult, GeometryData, WorldConfig, WorldParams, WorkerResponse } from '../../types';
+import { BlocksMap, ChunkDataResult, GeometryData, WorldConfig, WorldParams, WorkerResponse, WorldType } from '../../types';
 
 /**
  * How many chunks along each axis form one sector.
@@ -66,7 +66,7 @@ interface ChunkGeoEntry {
  */
 export default class ProceduralWorld extends Group {
   private readonly chunkSize: number;
-  private readonly chunkHeight: number;
+  private chunkHeight: number;
   private readonly renderDistance: number;
   private readonly camera: PerspectiveCamera;
   private readonly simplex: SimplexNoise;
@@ -112,6 +112,7 @@ export default class ProceduralWorld extends Group {
 
   readonly params: WorldParams = {
     seed: Math.floor(Math.random() * 100_000),
+    worldType: WorldType.Standard,
     terrain: {
       scale:       64,
       magnitude:   0.7,
@@ -231,6 +232,10 @@ export default class ProceduralWorld extends Group {
     this.updateChunks(true);
   }
 
+  public setChunkHeight(height: number): void {
+    this.chunkHeight = height;
+  }
+
   // ─── Public API ────────────────────────────────────────────────────────────
 
   public toggleShaders(enabled: boolean): void {
@@ -275,6 +280,41 @@ export default class ProceduralWorld extends Group {
       }
     }
     return null;
+  }
+
+  public reset(newParams?: Partial<WorldParams>): void {
+    if (newParams) {
+        if (newParams.seed !== undefined) this.params.seed = newParams.seed;
+        if (newParams.worldType !== undefined) this.params.worldType = newParams.worldType;
+        if (newParams.terrain) Object.assign(this.params.terrain, newParams.terrain);
+    }
+
+    // Clear all state
+    for (const mesh of this.sectorMeshes.values()) {
+        mesh.geometry.dispose();
+        this.remove(mesh);
+    }
+    for (const outline of this.sectorOutlines.values()) {
+        outline.geometry.dispose();
+        this.remove(outline);
+    }
+
+    this.loadedChunks.clear();
+    this.pendingChunks.clear();
+    this.chunkGeoCache.clear();
+    this.sectorMeshes.clear();
+    this.sectorOutlines.clear();
+    this.pendingSectors.clear();
+    this.meshQueue.length = 0;
+    this.rebuildMeshQueue.length = 0;
+    this.rebuildQueue.length = 0;
+    this.rebuildSet.clear();
+    this.pendingRebuildChunks.clear();
+    
+    this.lastPlayerChunkX = Infinity;
+    this.lastPlayerChunkZ = Infinity;
+
+    this.updateChunks(true);
   }
 
   /**

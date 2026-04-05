@@ -67,7 +67,7 @@ export default class UI {
 
     switch (cmd) {
       case '/help':
-        this.addChatMessage('Available: /tp, /time, /shaders, /wireframe, /survival, /creative, /spawn');
+        this.addChatMessage('Available: /tp, /time, /shaders, /wireframe, /survival, /creative, /spawn, /menu, /regen, /set chunk height');
         break;
       case '/time':
         const phase = args[0]?.toLowerCase() || 'noon';
@@ -130,6 +130,33 @@ export default class UI {
       case '/spawn':
         this.camera.position.set(0, 40, 0);
         this.addChatMessage('Spawned player!');
+        break;
+      case '/menu':
+        const menu = document.getElementById('world-menu')!;
+        menu.classList.toggle('hidden');
+        if (!menu.classList.contains('hidden')) {
+            document.exitPointerLock();
+        }
+        break;
+      case '/regen':
+        this.player?.world.reset();
+        this.player?.teleport(0, 40, 0);
+        this.addChatMessage('World regenerated!');
+        break;
+      case '/set':
+        if (args[0] === 'chunk' && args[1] === 'height' && args[2]) {
+            const h = parseInt(args[2]);
+            if (!isNaN(h) && h > 0) {
+                this.player?.world.setChunkHeight(h);
+                this.player?.world.reset();
+                this.player?.teleport(0, Math.max(40, h + 5), 0);
+                this.addChatMessage(`Chunk height set to ${h}. World regenerated.`);
+            } else {
+                this.addChatMessage('Usage: /set chunk height <number>');
+            }
+        } else {
+            this.addChatMessage('Usage: /set chunk height <number>');
+        }
         break;
       default:
         // Regular chat message, just don't handle as command
