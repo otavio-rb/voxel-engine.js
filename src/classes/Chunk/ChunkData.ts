@@ -82,8 +82,9 @@ export default class ChunkData {
 
           const depth  = Math.max(0, sy - y);
           // Smoothstep: 0.05 at surface (rare circular entrances)
-          //             → 0.35 at depth ≥ 16 (tall spacious spaghetti tunnels)
-          const t      = Math.min(1, depth / 16);
+          //             → 0.35 at depth ≥ 30 (fully developed spaghetti tunnels)
+          // With height=128 and sy ~50-100, caves have 50-100 blocks to develop.
+          const t      = Math.min(1, depth / 30);
           const smooth = t * t * (3 - 2 * t);
           const radius = 0.05 + 0.30 * smooth;
 
