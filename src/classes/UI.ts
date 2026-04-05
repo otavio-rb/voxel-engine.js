@@ -67,7 +67,7 @@ export default class UI {
 
     switch (cmd) {
       case '/help':
-        this.addChatMessage('Available: /tp, /time, /shaders, /survival, /creative, /spawn');
+        this.addChatMessage('Available: /tp, /time, /shaders, /wireframe, /survival, /creative, /spawn');
         break;
       case '/time':
         const phase = args[0]?.toLowerCase() || 'noon';
@@ -94,6 +94,13 @@ export default class UI {
             this.addChatMessage('Usage: /shaders [on/off]');
         }
         break;
+      case '/wireframe': {
+        const wfArg  = args[0]?.toLowerCase();
+        const wfForce = wfArg === 'on' ? true : wfArg === 'off' ? false : undefined;
+        const wfOn   = this.player?.world.toggleWireframe(wfForce);
+        this.addChatMessage(`Wireframe ${wfOn ? 'on' : 'off'}`);
+        break;
+      }
       case '/tp':
         if (args.length === 3) {
           const x = parseFloat(args[0]);
