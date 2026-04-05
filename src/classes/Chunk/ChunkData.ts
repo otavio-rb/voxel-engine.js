@@ -1,6 +1,6 @@
 import { SimplexNoise } from 'three/examples/jsm/Addons.js';
 import RNG from '../../utils/rng';
-import { BlockType, BlocksMap, ChunkDataResult, WorldParams } from '../../types';
+import { BlockType, BlocksMap, ChunkDataResult, WorldParams, WorldType } from '../../types';
 
 interface ChunkDataParams {
   size: number;
@@ -42,6 +42,41 @@ export default class ChunkData {
   }
 
   private generate(): void {
+    switch (this.worldParams.worldType) {
+      case WorldType.Flat:
+        this.generateFlat();
+        break;
+      case WorldType.Cavern:
+        this.generateCavern();
+        break;
+      case WorldType.Lunar:
+        this.generateLunar();
+        break;
+      case WorldType.Jupyter:
+        this.generateJupyter();
+        break;
+      case WorldType.Standard:
+      default:
+        this.generateStandard();
+        break;
+    }
+  }
+
+  private generateFlat(): void {
+    const height = 20;
+    for (let x = this.startX; x < this.endX; x++) {
+      for (let z = this.startZ; z < this.endZ; z++) {
+        for (let y = 0; y <= height; y++) {
+          let type: BlockType = BlockType.Stone;
+          if (y === height) type = BlockType.Grass;
+          else if (y > height - 3) type = BlockType.Dirt;
+          this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+        }
+      }
+    }
+  }
+
+  private generateStandard(): void {
     const seaLevel = Math.floor(this.height * 0.25);
     const surfaceOf = new Map<number, number>();
     const colIdx = (x: number, z: number) => x * 100_000 + z;
@@ -191,6 +226,79 @@ export default class ChunkData {
                   }
                }
              }
+          }
+        }
+      }
+    }
+  }
+
+  private generateCavern(): void {
+    for (let x = this.startX; x < this.endX; x++) {
+      for (let z = this.startZ; z < this.endZ; z++) {
+        for (let y = 0; y < this.height; y++) {
+          const noise = this.simplex.noise3d(x / 16, y / 16, z / 16);
+          const density = noise + (0.5 - y / this.height);
+          
+          if (density > 0.1) {
+            let type = BlockType.Stone;
+            if (y < 5) type = BlockType.Water;
+            if (noise > 0.7) type = BlockType.Coal;
+            this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+          }
+        }
+      }
+    }
+  }
+
+  private generateLunar(): void {
+    const surfaceOf = new Map<number, number>();
+    const colIdx = (x: number, z: number) => x * 100_000 + z;
+
+    for (let x = this.startX; x < this.endX; x++) {
+      for (let z = this.startZ; z < this.endZ; z++) {
+        const noise = this.octaveBaseNoise(x, z, 2.0, 3);
+        let sy = Math.floor(this.height * (0.1 + 0.2 * noise));
+        
+        // Simple crater logic
+        const cx = Math.floor(x / 50) * 50 + 25;
+        const cz = Math.floor(z / 50) * 50 + 25;
+        const dist = Math.sqrt((x - cx) ** 2 + (z - cz) ** 2);
+        if (dist < 15) {
+            const craterDepth = (15 - dist) * 0.5;
+            sy -= Math.floor(craterDepth);
+        }
+
+        sy = Math.max(2, Math.min(sy, this.height));
+        surfaceOf.set(colIdx(x, z), sy);
+
+        for (let y = 0; y <= sy; y++) {
+          let type = BlockType.Stone;
+          if (y === sy && noise > 0.5) type = BlockType.Snow; // Grayish dust/snow/sand
+          this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+        }
+      }
+    }
+  }
+
+  private generateJupyter(): void {
+    for (let x = this.startX; x < this.endX; x++) {
+      for (let z = this.startZ; z < this.endZ; z++) {
+        const baseNoise = this.octaveBaseNoise(x, z, 5.0, 4);
+        const surfaceY = Math.floor(this.height * (0.2 + 0.3 * baseNoise));
+
+        for (let y = 0; y < this.height; y++) {
+          if (y <= surfaceY) {
+            let type = BlockType.Sand; // Orange/Red surface
+            if (y < surfaceY - 5) type = BlockType.Stone;
+            this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+          } else {
+            // "Gas" layers / Clouds
+            const gasNoise = this.simplex.noise3d(x / 32, y / 8, z / 32);
+            if (gasNoise > 0.6) {
+                let type = BlockType.Leaves; // Greenish/Colorful gas
+                if (y > this.height * 0.7) type = BlockType.Snow; // High white clouds
+                this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+            }
           }
         }
       }

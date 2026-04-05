@@ -52,8 +52,17 @@ export interface TerrainParams {
   persistence: number;
 }
 
+export enum WorldType {
+  Standard = 'standard',
+  Flat = 'flat',
+  Cavern = 'cavern',
+  Lunar = 'lunar',
+  Jupyter = 'jupyter',
+}
+
 export interface WorldParams {
   seed: number;
+  worldType: WorldType;
   terrain: TerrainParams;
 }
 

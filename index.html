@@ -18,7 +18,45 @@
         <div class="chat">
           <div class="chat-message">Welcome to Voxels! Press ';' to type commands.</div>
         </div>
-        <input type="text" class="chat-input" placeholder="Type a command...">
+        <div class="chat-input-container">
+          <input type="text" class="chat-input" placeholder="Type a command (/help)..." spellcheck="false" />
+        </div>
+      </div>
+    </div>
+
+    <!-- World Menu Overlay -->
+    <div id="world-menu" class="menu-overlay">
+      <div class="menu-content">
+        <h1>Voxel World</h1>
+        <p>Escolha o rito de criação do seu novo mundo</p>
+        
+        <div class="world-options">
+          <button class="world-btn active" data-type="standard">
+            <span class="btn-title">Padrão</span>
+            <span class="btn-desc">Mundo procedural com biomas e cavernas</span>
+          </button>
+          <button class="world-btn" data-type="flat">
+            <span class="btn-title">Plano</span>
+            <span class="btn-desc">Superfície lisa para construções livres</span>
+          </button>
+          <button class="world-btn" data-type="cavern">
+            <span class="btn-title">Cavernoso</span>
+            <span class="btn-desc">Estruturas 3D orgânicas e cavernas profundas</span>
+          </button>
+          <button class="world-btn" data-type="lunar">
+            <span class="btn-title">Lunar</span>
+            <span class="btn-desc">Solo cinzento com crateras e baixa gravidade</span>
+          </button>
+          <button class="world-btn" data-type="jupyter">
+            <span class="btn-title">Jupyter</span>
+            <span class="btn-desc">Atmosfera exótica com nuvens de gás densas</span>
+          </button>
+        </div>
+
+        <div class="menu-actions">
+          <button id="btn-generate" class="primary-btn">GERAR MUNDO</button>
+          <button id="btn-resume" class="secondary-btn" style="display: none;">VOLTAR AO JOGO</button>
+        </div>
       </div>
     </div>
     <script type="module" src="./main.ts"></script>
