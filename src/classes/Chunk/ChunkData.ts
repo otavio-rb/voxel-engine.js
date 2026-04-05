@@ -69,9 +69,13 @@ export default class ChunkData {
       for (let z = this.startZ; z < this.endZ; z++) {
         const sy = surfaceOf.get(colIdx(x, z))!;
         for (let y = 2; y <= sy; y++) {
-          const n         = this.simplex.noise3d(x / 32, y / 16, z / 32);
-          const depth     = Math.max(0, sy - y);
-          const threshold = 0.13 + Math.min(0.14, depth * 0.012);
+          const n     = this.simplex.noise3d(x / 32, y / 16, z / 32);
+          const depth = Math.max(0, sy - y);
+          // Smoothstep ramp: near surface → rare entrance holes (0.03),
+          // grows smoothly to 0.25 at depth ≥ 10 → wide underground tunnels.
+          const t         = Math.min(1, depth / 10);
+          const smooth    = t * t * (3 - 2 * t);
+          const threshold = 0.03 + 0.22 * smooth;
           if (Math.abs(n) < threshold) caveSet.add(this.key(x, y, z));
         }
       }
