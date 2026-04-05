@@ -106,10 +106,14 @@ export default class ChunkData {
         for (let y = 0; y <= maxVisibleY; y++) {
           const isCarved = caveSet.has(this.key(x, y, z));
 
-          // Flooded caves below sea level
+          // Only flood a carved block if the surface of this column is itself
+          // underwater (ocean floor). Land caves remain dry — water doesn't
+          // seep underground just because y <= seaLevel.
           if (isCarved) {
-            if (y <= seaLevel) this.blocks[this.key(x, y, z)] = { type: BlockType.Water, position: { x, y, z } };
-            continue; // carved air — no trees grow inside caves
+            if (y <= seaLevel && sy <= seaLevel) {
+              this.blocks[this.key(x, y, z)] = { type: BlockType.Water, position: { x, y, z } };
+            }
+            continue;
           }
 
           const isTerrain = y <= sy;
