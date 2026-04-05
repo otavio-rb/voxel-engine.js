@@ -74,15 +74,18 @@ export default class ChunkData {
           // winds through the terrain — producing circular cross-sections and
           // the characteristic spaghetti/worm look.
           // Large prime offsets make the two fields effectively independent.
-          const n1 = this.simplex.noise3d(x / 55, y / 40, z / 55);
-          const n2 = this.simplex.noise3d(x / 55 + 317.3, y / 40 + 317.3, z / 55 + 317.3);
+          // Scale: x/80, z/80 → gentle horizontal curves (wider tunnels)
+          //        y/100       → slow vertical change = tall cave cross-sections
+          // Two independent fields → circular tube cross-section (spaghetti)
+          const n1 = this.simplex.noise3d(x / 80, y / 100, z / 80);
+          const n2 = this.simplex.noise3d(x / 80 + 317.3, y / 100 + 317.3, z / 80 + 317.3);
 
           const depth  = Math.max(0, sy - y);
-          // Smoothstep: radius 0.07 at surface (rare circular entrances)
-          //             → 0.22 at depth ≥ 14 (spacious worm tunnels)
-          const t      = Math.min(1, depth / 14);
+          // Smoothstep: 0.05 at surface (rare circular entrances)
+          //             → 0.35 at depth ≥ 16 (tall spacious spaghetti tunnels)
+          const t      = Math.min(1, depth / 16);
           const smooth = t * t * (3 - 2 * t);
-          const radius = 0.07 + 0.15 * smooth;
+          const radius = 0.05 + 0.30 * smooth;
 
           if (n1 * n1 + n2 * n2 < radius * radius) caveSet.add(this.key(x, y, z));
         }
@@ -121,7 +124,8 @@ export default class ChunkData {
             const rightSolid  = isSolid(x + 1, y, z) || (y <= seaLevel && !caveSet.has(this.key(x + 1, y, z)));
             const frontSolid  = isSolid(x, y, z - 1) || (y <= seaLevel && !caveSet.has(this.key(x, y, z - 1)));
             const backSolid   = isSolid(x, y, z + 1) || (y <= seaLevel && !caveSet.has(this.key(x, y, z + 1)));
-            const bottomSolid = y > 0;
+            // Bug fix: y > 0 alone hid cave ceilings (block below carved = not solid).
+            const bottomSolid = y > 0 && isSolid(x, y - 1, z);
 
             if (topSolid && leftSolid && rightSolid && frontSolid && backSolid && bottomSolid) continue;
 
