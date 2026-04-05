@@ -69,14 +69,22 @@ export default class ChunkData {
       for (let z = this.startZ; z < this.endZ; z++) {
         const sy = surfaceOf.get(colIdx(x, z))!;
         for (let y = 2; y <= sy; y++) {
-          const n     = this.simplex.noise3d(x / 32, y / 16, z / 32);
-          const depth = Math.max(0, sy - y);
-          // Smoothstep ramp: near surface → rare entrance holes (0.03),
-          // grows smoothly to 0.25 at depth ≥ 10 → wide underground tunnels.
-          const t         = Math.min(1, depth / 10);
-          const smooth    = t * t * (3 - 2 * t);
-          const threshold = 0.03 + 0.22 * smooth;
-          if (Math.abs(n) < threshold) caveSet.add(this.key(x, y, z));
+          // Spaghetti caves: two independent noise fields form a 2D vector
+          // (n1, n2). Points where n1²+n2² < radius² lie inside a tube that
+          // winds through the terrain — producing circular cross-sections and
+          // the characteristic spaghetti/worm look.
+          // Large prime offsets make the two fields effectively independent.
+          const n1 = this.simplex.noise3d(x / 55, y / 40, z / 55);
+          const n2 = this.simplex.noise3d(x / 55 + 317.3, y / 40 + 317.3, z / 55 + 317.3);
+
+          const depth  = Math.max(0, sy - y);
+          // Smoothstep: radius 0.07 at surface (rare circular entrances)
+          //             → 0.22 at depth ≥ 14 (spacious worm tunnels)
+          const t      = Math.min(1, depth / 14);
+          const smooth = t * t * (3 - 2 * t);
+          const radius = 0.07 + 0.15 * smooth;
+
+          if (n1 * n1 + n2 * n2 < radius * radius) caveSet.add(this.key(x, y, z));
         }
       }
     }
