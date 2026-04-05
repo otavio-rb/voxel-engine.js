@@ -17,7 +17,7 @@ class Game {
 
   constructor() {
     const chunkSize     = this.loadSetting('chunkSize',     16);
-    const chunkHeight   = this.loadSetting('chunkHeight',   128);
+    const chunkHeight   = this.loadSetting('chunkHeight',   32);
     const renderDistance = this.loadSetting('renderDistance', 6);
 
     this.world = new ProceduralWorld({ chunkSize, chunkHeight, renderDistance, camera: this.camera });
