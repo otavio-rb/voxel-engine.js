@@ -4,6 +4,10 @@ import {
   BufferGeometry,
   BufferAttribute,
   Float32BufferAttribute,
+  LineSegments,
+  EdgesGeometry,
+  BoxGeometry,
+  LineBasicMaterial,
   WebGLRenderer,
   Scene,
   Vector3,
@@ -81,6 +85,8 @@ export default class ProceduralWorld extends Group {
   // ─── Sector state ─────────────────────────────────────────────────────────
   /** One merged Mesh per sector — the only objects submitted to the GPU for rendering. */
   private readonly sectorMeshes      = new Map<string, Mesh>();
+  /** Bounding-box outline per sector, visible only in wireframe mode. */
+  private readonly sectorOutlines    = new Map<string, LineSegments>();
   /** Sectors waiting for their mesh to be rebuilt (drained 1 per frame). */
   private readonly pendingSectors    = new Set<string>();
 
@@ -97,6 +103,8 @@ export default class ProceduralWorld extends Group {
   private readonly pendingRebuildChunks = new Set<string>();
 
   private readonly material: ShaderMaterial;
+  private readonly outlineMaterial: LineBasicMaterial;
+  private wireframeEnabled = false;
   private readonly sky: Sky;
 
   private lastPlayerChunkX = Infinity;
@@ -216,6 +224,8 @@ export default class ProceduralWorld extends Group {
       transparent:  true,
     });
 
+    this.outlineMaterial = new LineBasicMaterial({ color: 0x00ff88, depthTest: false });
+
     this.sky = new Sky();
     this.add(this.sky);
     this.updateChunks(true);
@@ -225,6 +235,20 @@ export default class ProceduralWorld extends Group {
 
   public toggleShaders(enabled: boolean): void {
     this.material.uniforms.uShadersEnabled.value = enabled ? 1.0 : 0.0;
+  }
+
+  /**
+   * Toggle wireframe rendering + sector bounding-box outlines.
+   * Pass `true`/`false` to force a state, or omit to toggle.
+   * Returns the new state.
+   */
+  public toggleWireframe(force?: boolean): boolean {
+    this.wireframeEnabled = force !== undefined ? force : !this.wireframeEnabled;
+    this.material.wireframe = this.wireframeEnabled;
+    for (const outline of this.sectorOutlines.values()) {
+      outline.visible = this.wireframeEnabled;
+    }
+    return this.wireframeEnabled;
   }
 
   public setTime(phase: string): void {
@@ -510,10 +534,19 @@ export default class ProceduralWorld extends Group {
       if (e) entries.push(e);
     }
 
+    // Dispose old sector mesh
     const old = this.sectorMeshes.get(sk);
     if (old) {
       old.geometry.dispose();
       this.remove(old);
+    }
+
+    // Dispose old outline
+    const oldOutline = this.sectorOutlines.get(sk);
+    if (oldOutline) {
+      oldOutline.geometry.dispose();
+      this.remove(oldOutline);
+      this.sectorOutlines.delete(sk);
     }
 
     if (entries.length === 0) {
@@ -525,6 +558,33 @@ export default class ProceduralWorld extends Group {
     const mesh = this.buildMesh(geo, creationTimes);
     this.add(mesh);
     this.sectorMeshes.set(sk, mesh);
+
+    // Build sector bounding-box outline (visible only in wireframe mode)
+    const outline = this.buildSectorOutline(sk);
+    this.add(outline);
+    this.sectorOutlines.set(sk, outline);
+  }
+
+  /** Bright bounding-box outline drawn at the sector's world-space footprint. */
+  private buildSectorOutline(sk: string): LineSegments {
+    const sectorWorld = this.chunkSize * SECTOR_CHUNKS;
+    const parts = sk.split(':');
+    const sx = Number(parts[1]);
+    const sz = Number(parts[2]);
+
+    const box   = new BoxGeometry(sectorWorld, this.chunkHeight, sectorWorld);
+    const edges = new EdgesGeometry(box);
+    box.dispose();
+
+    const line = new LineSegments(edges, this.outlineMaterial);
+    line.position.set(
+      sx + sectorWorld / 2,
+      this.chunkHeight  / 2,
+      sz + sectorWorld  / 2,
+    );
+    line.renderOrder = 1;          // draw on top of terrain
+    line.visible     = this.wireframeEnabled;
+    return line;
   }
 
   /**
