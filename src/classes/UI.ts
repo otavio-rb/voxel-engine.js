@@ -67,10 +67,7 @@ export default class UI {
 
     switch (cmd) {
       case '/help':
-        this.addChatMessage('Available: /tp, /time, /shaders, /wireframe, /survival, /creative, /spawn, /clear, /locate');
-        break;
-      case '/clear':
-        this.chatEl.innerHTML = '';
+        this.addChatMessage('Available: /tp, /time, /shaders, /wireframe, /survival, /creative, /spawn');
         break;
       case '/time':
         const phase = args[0]?.toLowerCase() || 'noon';
