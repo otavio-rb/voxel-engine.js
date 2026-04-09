@@ -1,6 +1,6 @@
 import ChunkData from '../classes/Chunk/ChunkData';
 import ChunkGeometry from '../classes/Chunk/ChunkGeometry';
-import { ChunkDataResult, ChunkJobData, WorkerResponse, ChunkBorders, BlocksMap } from '../types';
+import { ChunkDataResult, ChunkJobData, WorkerResponse, ChunkBorders } from '../types';
 
 self.onmessage = (e: MessageEvent<ChunkJobData>): void => {
   const job = e.data;
@@ -19,24 +19,30 @@ self.onmessage = (e: MessageEvent<ChunkJobData>): void => {
       }).getData();
 
   const geometry = new ChunkGeometry(chunkDataResult, job.neighbourBorderBlocks).getData();
+  const borders = computeBorders(chunkDataResult, job.size, job.height);
 
   const response: WorkerResponse = {
     chunkKey:  job.chunkKey,
     chunkData: chunkDataResult,
-    borders:   computeBorders(chunkDataResult),
+    borders:   borders,
     opaque:    geometry.opaque,
     water:     geometry.water,
   };
 
   // Transfer the ArrayBuffers instead of copying them (zero-copy).
-  // Once transferred, the worker can no longer access these buffers.
   const transferables: ArrayBuffer[] = [
+    chunkDataResult.blocks.buffer as ArrayBuffer,
+    borders.negX!.buffer as ArrayBuffer,
+    borders.posX!.buffer as ArrayBuffer,
+    borders.negZ!.buffer as ArrayBuffer,
+    borders.posZ!.buffer as ArrayBuffer,
     geometry.opaque.positions.buffer,
     geometry.opaque.normals.buffer,
     geometry.opaque.uvs.buffer,
     geometry.opaque.colors.buffer,
     geometry.opaque.isWater.buffer,
     geometry.opaque.creationTime.buffer,
+    geometry.opaque.ao.buffer,
     geometry.opaque.vertices.buffer,
     geometry.water.positions.buffer,
     geometry.water.normals.buffer,
@@ -44,28 +50,30 @@ self.onmessage = (e: MessageEvent<ChunkJobData>): void => {
     geometry.water.colors.buffer,
     geometry.water.isWater.buffer,
     geometry.water.creationTime.buffer,
+    geometry.water.ao.buffer,
     geometry.water.vertices.buffer,
   ];
 
   (self as any).postMessage(response, transferables);
 };
 
-function computeBorders(data: ChunkDataResult): ChunkBorders {
-    const maxX = data.endX - 1;
-    const maxZ = data.endZ - 1;
-    const negX: BlocksMap = {};
-    const posX: BlocksMap = {};
-    const negZ: BlocksMap = {};
-    const posZ: BlocksMap = {};
+function computeBorders(data: ChunkDataResult, size: number, height: number): ChunkBorders {
+    const negX = new Int8Array(height * size).fill(-1);
+    const posX = new Int8Array(height * size).fill(-1);
+    const negZ = new Int8Array(height * size).fill(-1);
+    const posZ = new Int8Array(height * size).fill(-1);
 
-    for (const k in data.blocks) {
-      const b  = data.blocks[k];
-      const bx = b.position.x;
-      const bz = b.position.z;
-      if (bx === data.startX) negX[k] = b;
-      if (bx === maxX)        posX[k] = b;
-      if (bz === data.startZ) negZ[k] = b;
-      if (bz === maxZ)        posZ[k] = b;
+    for (let y = 0; y < height; y++) {
+        for (let l = 0; l < size; l++) {
+            // negX: lx = 0, lz = l
+            negX[y * size + l] = data.blocks[y * size * size + l * size + 0];
+            // posX: lx = size - 1, lz = l
+            posX[y * size + l] = data.blocks[y * size * size + l * size + (size - 1)];
+            // negZ: lz = 0, lx = l
+            negZ[y * size + l] = data.blocks[y * size * size + 0 * size + l];
+            // posZ: lz = size - 1, lx = l
+            posZ[y * size + l] = data.blocks[y * size * size + (size - 1) * size + l];
+        }
     }
 
     return { negX, posX, negZ, posZ };

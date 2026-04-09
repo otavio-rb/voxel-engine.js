@@ -37,12 +37,11 @@ export interface BlockPosition {
   z: number;
 }
 
-export interface BlockData {
-  type: BlockType;
-  position: BlockPosition;
+export interface BlockPosition {
+  x: number;
+  y: number;
+  z: number;
 }
-
-export type BlocksMap = Record<string, BlockData>;
 
 export interface TerrainParams {
   scale: number;
@@ -57,7 +56,7 @@ export enum WorldType {
   Flat = 'flat',
   Cavern = 'cavern',
   Lunar = 'lunar',
-  Jupyter = 'jupyter',
+  Mercury = 'mercury',
 }
 
 export interface WorldParams {
@@ -76,9 +75,9 @@ export interface ChunkJobData {
   endZ: number;
   worldParams: WorldParams;
   /** Border blocks from already-loaded neighbours, used for cross-chunk face culling. */
-  neighbourBorderBlocks: BlocksMap;
+  neighbourBorderBlocks: ChunkBorders;
   /** If provided, skip terrain generation and use these blocks directly (async rebuild). */
-  existingBlocks?: BlocksMap;
+  existingBlocks?: Int8Array;
 }
 
 /** Typed arrays so buffers can be transferred (zero-copy) from worker → main thread. */
@@ -89,6 +88,7 @@ export interface GeometryData {
   colors:    Float32Array;
   isWater:   Float32Array;
   creationTime: Float32Array;
+  ao:        Float32Array;
   vertices:  Uint32Array;
 }
 
@@ -97,19 +97,19 @@ export interface ChunkDataResult {
   endX: number;
   startZ: number;
   endZ: number;
-  blocks: BlocksMap;
+  blocks: Int8Array;
 }
 
 /** One-block-wide border slices cached per chunk to avoid O(n) iteration on every rebuild. */
 export interface ChunkBorders {
   /** Blocks at x === startX (exposed toward the -X neighbour). */
-  negX: BlocksMap;
+  negX?: Int8Array;
   /** Blocks at x === endX - 1 (exposed toward the +X neighbour). */
-  posX: BlocksMap;
+  posX?: Int8Array;
   /** Blocks at z === startZ (exposed toward the -Z neighbour). */
-  negZ: BlocksMap;
+  negZ?: Int8Array;
   /** Blocks at z === endZ - 1 (exposed toward the +Z neighbour). */
-  posZ: BlocksMap;
+  posZ?: Int8Array;
 }
 
 export interface WorkerResponse {

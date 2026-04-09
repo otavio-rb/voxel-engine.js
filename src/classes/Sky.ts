@@ -13,7 +13,7 @@ export default class Sky extends Group {
   public worldType: WorldType = WorldType.Standard;
 
   public dayTime = Math.PI / 2; // Start at Midday
-  private readonly cycleSpeed = 0.05;
+  private readonly cycleSpeed = 0.02;
 
   constructor() {
     super();
@@ -95,23 +95,43 @@ export default class Sky extends Group {
 
 
   private initSunAndMoon(): void {
-    const sunGeom = new PlaneGeometry(100, 100);
-    const moonGeom = new PlaneGeometry(80, 80);
+    const sunGeom = new PlaneGeometry(80, 80);
+    const moonGeom = new PlaneGeometry(60, 60);
 
     this.sunMaterial = new ShaderMaterial({
       uniforms: { uTime: { value: 0 }, uColor: { value: new Color(0xfff4e0) } },
       vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
       fragmentShader: `
         uniform float uTime; uniform vec3 uColor; varying vec2 vUv;
+        
+        float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+        }
+
         void main() {
-          float dist = distance(vUv, vec2(0.5));
-          float glow = pow(1.0 - smoothstep(0.0, 0.5, dist), 2.0);
-          float core = 1.0 - smoothstep(0.0, 0.1, dist);
-          vec3 finalColor = uColor + core * 2.0 + glow * 1.5;
-          finalColor *= 1.0 + sin(uTime * 5.0) * 0.05;
-          // Soft alpha for additive blending
-          float alpha = smoothstep(0.5, 0.1, dist);
-          gl_FragColor = vec4(finalColor * alpha, alpha);
+          // Square sun check
+          float square = step(0.05, vUv.x) * step(0.05, 1.0 - vUv.x) * step(0.05, vUv.y) * step(0.05, 1.0 - vUv.y);
+          if (square < 0.5) discard;
+          
+          // Border check
+          float border = 0.0;
+          if (vUv.x < 0.15 || vUv.x > 0.85 || vUv.y < 0.15 || vUv.y > 0.85) {
+            border = 1.0;
+          }
+
+          vec3 yellow = vec3(1.0, 0.9, 0.2);
+          vec3 orange = vec3(1.0, 0.5, 0.0);
+          
+          vec3 finalColor = mix(yellow, orange, border);
+          
+          // Scintillation effect
+          float sparkle = hash(vUv + floor(uTime * 10.0));
+          if (sparkle > 0.9) {
+            finalColor += 2.0 * (sparkle - 0.9);
+          }
+
+          finalColor *= 2.0; 
+          gl_FragColor = vec4(finalColor, 1.0);
         }
       `,
       transparent: true,
@@ -126,12 +146,12 @@ export default class Sky extends Group {
       fragmentShader: `
         uniform float uTime; uniform vec3 uColor; varying vec2 vUv;
         void main() {
-          float dist = distance(vUv, vec2(0.5));
-          float glow = pow(1.0 - smoothstep(0.0, 0.5, dist), 3.0);
-          float core = 1.0 - smoothstep(0.0, 0.2, dist);
-          vec3 finalColor = uColor + core * 0.8 + glow * 0.5;
-          float alpha = smoothstep(0.5, 0.1, dist);
-          gl_FragColor = vec4(finalColor * alpha, alpha);
+          // Square moon
+          float square = step(0.1, vUv.x) * step(0.1, 1.0 - vUv.x) * step(0.1, vUv.y) * step(0.1, 1.0 - vUv.y);
+          if (square < 0.5) discard;
+          
+          vec3 finalColor = uColor * 1.5;
+          gl_FragColor = vec4(finalColor, 1.0);
         }
       `,
       transparent: true,
@@ -185,6 +205,9 @@ export default class Sky extends Group {
     
     // Higher distance (1000 instead of 500) to keep them behind clouds (Y=200)
     const dist = 1000;
+    const sunScale = this.worldType === WorldType.Mercury ? 8.0 : 1.5;
+    this.sunMesh.scale.set(sunScale, sunScale, sunScale);
+    
     this.sunMesh.position.set(Math.cos(angle) * dist, Math.sin(angle) * dist, 0);
     this.moonMesh.position.set(Math.cos(angle + Math.PI) * dist, Math.sin(angle + Math.PI) * dist, 0);
     
@@ -212,7 +235,7 @@ export default class Sky extends Group {
         cloudVisible = 0.0;
         starsVisible = 1.0; 
         moonVisible = false; // Player is on the moon
-    } else if (this.worldType === WorldType.Jupyter) {
+    } else if (this.worldType === WorldType.Mercury) {
         daySkyColor = new Color(0x442211);
         nightSkyColor = new Color(0x111122);
         horizonColor = new Color(0xaa4422);
@@ -223,7 +246,7 @@ export default class Sky extends Group {
 
     this.ambient.color.lerpColors(nightSkyColor, daySkyColor, Math.max(0, sunHeight));
     this.ambient.intensity = isDay ? 0.7 : minAmbient;
-    this.moonMesh.visible = moonVisible;
+    this.moonMesh.visible = moonVisible && this.worldType !== WorldType.Mercury;
 
     this.sunMaterial.uniforms.uTime.value += 0.016;
     this.moonMaterial.uniforms.uTime.value += 0.016;
@@ -241,7 +264,7 @@ export default class Sky extends Group {
     this.moonMesh.lookAt(camera.position);
 
     let cloudColor = new Color(0xffffff);
-    if (this.worldType === WorldType.Jupyter) cloudColor = new Color(0xaa8844);
+    if (this.worldType === WorldType.Mercury) cloudColor = new Color(0xaa8844);
     
     this.cloudsMaterial.uniforms.uColor.value.lerpColors(new Color(0x333333).multiply(cloudColor), cloudColor, Math.max(0, sunHeight));
     this.cloudsMaterial.visible = cloudVisible > 0.01;

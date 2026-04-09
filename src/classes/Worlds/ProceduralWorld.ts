@@ -24,7 +24,6 @@ import {
   WorldParams, 
   ChunkDataResult, 
   WorkerResponse, 
-  BlocksMap, 
   GeometryData, 
   WorldConfig, 
   ChunkBorders 
@@ -44,7 +43,7 @@ interface LoadedChunk {
 export default class ProceduralWorld extends Group {
   private readonly chunkSize: number;
   private chunkHeight: number;
-  private readonly renderDistance: number;
+  private renderDistance: number;
   private readonly camera: PerspectiveCamera;
   private readonly simplex: SimplexNoise;
   private readonly pool: WorkerPool;
@@ -74,6 +73,7 @@ export default class ProceduralWorld extends Group {
   private lastPlayerChunkZ = Infinity;
   private lastUpdatePos    = new Vector3();
   private elapsedTime      = 0;
+  public isUnderwater     = false;
 
   readonly params: WorldParams = {
     seed: Math.floor(Math.random() * 100_000),
@@ -110,14 +110,18 @@ export default class ProceduralWorld extends Group {
         uSkyColor:       { value: new Color(0x87CEEB) },
         uSunDirection:   { value: new Vector3(1, 1, 1).normalize() },
         uShadersEnabled: { value: 1.0 },
+        uFogNear:        { value: 128.0 },
+        uFogFar:         { value: 256.0 },
       },
       vertexShader: `
         attribute float creationTime;
+        attribute float ao;
         varying vec3 vNormal;
         varying vec3 vColor;
         varying vec2 vUv;
         varying vec3 vWorldPos;
         varying float vCreationTime;
+        varying float vAo;
         uniform float uTime;
 
         void main() {
@@ -126,6 +130,7 @@ export default class ProceduralWorld extends Group {
           vUv = uv;
           vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
           vCreationTime = creationTime;
+          vAo = ao;
 
           vec3 pos = position;
           float age = uTime - creationTime;
@@ -140,13 +145,17 @@ export default class ProceduralWorld extends Group {
         uniform vec3 uSkyColor;
         uniform vec3 uSunDirection;
         uniform float uShadersEnabled;
+        uniform float uFogNear;
+        uniform float uFogFar;
         varying vec3 vNormal;
         varying vec3 vColor;
         varying vec3 vWorldPos;
+        varying float vAo;
 
         void main() {
+          float aoMultiplier = 0.2 + 0.8 * vAo;
           if (uShadersEnabled < 0.5) {
-            gl_FragColor = vec4(vColor, 1.0);
+            gl_FragColor = vec4(vColor * aoMultiplier, 1.0);
             return;
           }
 
@@ -154,9 +163,9 @@ export default class ProceduralWorld extends Group {
           float diffuse = max(dot(vNormal, sunDir), 0.0);
           float ambient = 0.4;
           
-          vec3 lighting = vColor * (diffuse + ambient);
+          vec3 lighting = vColor * (diffuse + ambient) * aoMultiplier;
           float dist = length(vWorldPos - cameraPosition);
-          float fog = smoothstep(128.0, 256.0, dist);
+          float fog = smoothstep(uFogNear, uFogFar, dist);
           
           gl_FragColor = vec4(mix(lighting, uSkyColor, fog), 1.0);
         }
@@ -170,17 +179,22 @@ export default class ProceduralWorld extends Group {
         uSkyColor:       { value: new Color(0x87CEEB) },
         uSunDirection:   { value: new Vector3(1, 1, 1).normalize() },
         uShadersEnabled: { value: 1.0 },
+        uFogNear:        { value: 128.0 },
+        uFogFar:         { value: 256.0 },
       },
       vertexShader: `
         attribute float creationTime;
+        attribute float ao;
         varying vec3 vNormal;
         varying vec3 vColor;
         varying vec3 vWorldPos;
+        varying float vAo;
         uniform float uTime;
 
         void main() {
           vNormal = normal;
           vColor = color;
+          vAo = ao;
           
           vec3 pos = position;
           pos.y += sin(uTime * 2.0 + position.x * 0.5) * 0.1;
@@ -192,12 +206,14 @@ export default class ProceduralWorld extends Group {
       `,
       fragmentShader: `
         uniform vec3 uSkyColor;
+        uniform float uFogNear;
+        uniform float uFogFar;
         varying vec3 vColor;
         varying vec3 vWorldPos;
 
         void main() {
           float dist = length(vWorldPos - cameraPosition);
-          float fog = smoothstep(128.0, 256.0, dist);
+          float fog = smoothstep(uFogNear, uFogFar, dist);
           
           vec3 waterBase = mix(vColor, vec3(0.0, 0.4, 0.8), 0.3);
           gl_FragColor = vec4(mix(waterBase, uSkyColor, fog), 0.7);
@@ -216,6 +232,11 @@ export default class ProceduralWorld extends Group {
     this.chunkHeight = height;
   }
 
+  public setRenderDistance(distance: number): void {
+    this.renderDistance = distance;
+    this.updateChunks(true);
+  }
+
   public toggleShaders(enabled: boolean): void {
     const val = enabled ? 1.0 : 0.0;
     this.opaqueMaterial.uniforms.uShadersEnabled.value = val;
@@ -227,6 +248,33 @@ export default class ProceduralWorld extends Group {
     this.opaqueMaterial.wireframe = this.wireframeEnabled;
     this.waterMaterial.wireframe  = this.wireframeEnabled;
     return this.wireframeEnabled;
+  }
+
+  public setUnderwater(underwater: boolean): void {
+    if (this.isUnderwater === underwater) return;
+    this.isUnderwater = underwater;
+    
+    let color: Color;
+    if (underwater) {
+        if (this.sky.worldType === WorldType.Mercury) {
+            color = new Color(0x330500); // Dark red/orange for lava
+        } else {
+            color = new Color(0x001133); // Normal underwater blue
+        }
+    } else {
+        color = this.sky.ambient.color;
+    }
+
+    const fogStart = underwater ? 2.0 : 128.0;
+    const fogEnd = underwater ? 32.0 : 256.0;
+
+    this.opaqueMaterial.uniforms.uSkyColor.value.copy(color);
+    this.waterMaterial.uniforms.uSkyColor.value.copy(color);
+    
+    this.opaqueMaterial.uniforms.uFogNear.value = fogStart;
+    this.opaqueMaterial.uniforms.uFogFar.value = fogEnd;
+    this.waterMaterial.uniforms.uFogNear.value = fogStart;
+    this.waterMaterial.uniforms.uFogFar.value = fogEnd;
   }
 
   public setTime(phase: string): void {
@@ -295,9 +343,11 @@ export default class ProceduralWorld extends Group {
   tick(): void {
     [this.opaqueMaterial, this.waterMaterial].forEach(mat => {
         mat.uniforms.uTime.value = this.elapsedTime;
-        mat.uniforms.uSkyColor.value.copy(this.sky.ambient.color);
+        if (!this.isUnderwater) {
+          mat.uniforms.uSkyColor.value.copy(this.sky.ambient.color);
+        }
         mat.uniforms.uSunDirection.value.copy(this.sky.directional.position).normalize();
-        if (this.sky.worldType === WorldType.Lunar || this.sky.worldType === WorldType.Jupyter) {
+        if (this.sky.worldType === WorldType.Lunar || this.sky.worldType === WorldType.Mercury) {
             mat.uniforms.uShadersEnabled.value = 1.0;
         }
     });
@@ -344,9 +394,8 @@ export default class ProceduralWorld extends Group {
 
   private applyChunkData(response: WorkerResponse, uTime: number): void {
     let chunk = this.loadedChunks.get(response.chunkKey);
-    if (chunk) {
-        this.destroyChunkMeshes(chunk);
-    } else {
+    
+    if (!chunk) {
         chunk = {
             data: response.chunkData,
             borders: response.borders,
@@ -354,9 +403,12 @@ export default class ProceduralWorld extends Group {
             waterMesh: null
         };
         this.loadedChunks.set(response.chunkKey, chunk);
+    } else {
+        // Update data and borders (handles rebuilds and meshQueue updates)
+        chunk.data = response.chunkData;
+        chunk.borders = response.borders;
+        this.destroyChunkMeshes(chunk);
     }
-
-    chunk.borders = response.borders;
 
     if (response.opaque.positions.length > 3) {
         chunk.opaqueMesh = this.buildSingleMesh(response.opaque, uTime, this.opaqueMaterial);
@@ -373,6 +425,7 @@ export default class ProceduralWorld extends Group {
     geometry.setAttribute('position',     new BufferAttribute(data.positions, 3));
     geometry.setAttribute('normal',       new BufferAttribute(data.normals,   3));
     geometry.setAttribute('color',        new BufferAttribute(data.colors,    3));
+    geometry.setAttribute('ao',           new BufferAttribute(data.ao,        1));
     
     // Reuse the transferred buffer to avoid allocations on the main thread
     data.creationTime.fill(creationTime);
@@ -410,20 +463,33 @@ export default class ProceduralWorld extends Group {
     const bz = Math.floor(point.z - normal.z * 0.001);
     const key = this.keyForBlock(bx, bz);
     const chunk = this.loadedChunks.get(key);
-    if (!chunk) return;
-    delete chunk.data.blocks[`${bx}.${by}.${bz}`];
+    if (!chunk || by < 0 || by >= this.chunkHeight) return;
+    
+    const lx = bx - chunk.data.startX;
+    const lz = bz - chunk.data.startZ;
+    const idx = by * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
+    
+    chunk.data.blocks[idx] = -1;
     this.asyncRebuild(key, chunk);
     this.rebuildAdjacentChunks(bx, bz, chunk.data);
   }
 
-  getBlock(bx: number, by: number, bz: number): { type: number; position: { x: number; y: number; z: number } } | null {
+  getBlock(bx: number, by: number, bz: number): number {
     const key = this.keyForBlock(bx, bz);
     let chunk: LoadedChunk | undefined;
     if (key === this.lastChunkKey && this.lastChunk) { chunk = this.lastChunk; }
     else { chunk = this.loadedChunks.get(key); if (chunk) { this.lastChunk = chunk; this.lastChunkKey = key; } }
-    return chunk?.data.blocks[`${bx}.${by}.${bz}`] ?? null;
+    
+    if (!chunk || by < 0 || by >= this.chunkHeight) return -1;
+    const lx = bx - chunk.data.startX;
+    const lz = bz - chunk.data.startZ;
+    const idx = by * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
+    return chunk.data.blocks[idx];
   }
-  isBlockSolid(bx: number, by: number, bz: number): boolean { return this.getBlock(bx, by, bz) !== null; }
+  isBlockSolid(bx: number, by: number, bz: number): boolean { 
+      const b = this.getBlock(bx, by, bz);
+      return b !== -1 && b !== 5 && b !== 6; // 5: Empty, 6: Water 
+  }
 
   private updateChunks(force: boolean): void {
     const cx = Math.floor(this.camera.position.x / this.chunkSize);
@@ -467,6 +533,16 @@ export default class ProceduralWorld extends Group {
 
   private onChunkReady(response: WorkerResponse): void {
     this.pendingChunks.delete(response.chunkKey);
+    // Add to loadedChunks immediately to prevent updateChunks from requesting it again
+    // while it awaits mesh creation in the meshQueue.
+    if (!this.loadedChunks.has(response.chunkKey)) {
+        this.loadedChunks.set(response.chunkKey, {
+            data: response.chunkData,
+            borders: response.borders,
+            opaqueMesh: null,
+            waterMesh: null
+        });
+    }
     if (this.isDesiredNumeric(response.chunkKey)) this.meshQueue.push(response);
   }
 
@@ -514,19 +590,26 @@ export default class ProceduralWorld extends Group {
     }
   }
 
-  private getNeighbourBorderBlocks(startX: number, startZ: number): BlocksMap {
+  private getNeighbourBorderBlocks(startX: number, startZ: number): ChunkBorders {
     const endX = startX + this.chunkSize;
     const endZ = startZ + this.chunkSize;
-    const result: BlocksMap = {};
+    
     const nxKey = this.chunkKey(startX - this.chunkSize, startZ);
     const pxKey = this.chunkKey(endX, startZ);
     const nzKey = this.chunkKey(startX, startZ - this.chunkSize);
     const pzKey = this.chunkKey(startX, endZ);
-    const nx = this.loadedChunks.get(nxKey); if (nx) Object.assign(result, nx.borders.posX);
-    const px = this.loadedChunks.get(pxKey); if (px) Object.assign(result, px.borders.negX);
-    const nz = this.loadedChunks.get(nzKey); if (nz) Object.assign(result, nz.borders.posZ);
-    const pz = this.loadedChunks.get(pzKey); if (pz) Object.assign(result, pz.borders.negZ);
-    return result;
+    
+    const nx = this.loadedChunks.get(nxKey);
+    const px = this.loadedChunks.get(pxKey);
+    const nz = this.loadedChunks.get(nzKey);
+    const pz = this.loadedChunks.get(pzKey);
+    
+    return {
+      negX: nx?.borders.posX,
+      posX: px?.borders.negX,
+      negZ: nz?.borders.posZ,
+      posZ: pz?.borders.negZ
+    };
   }
 
   private queueNeighbourRebuilds(chunkKey: number): void {
