@@ -1,4 +1,5 @@
-import { DirectionalLight, AmbientLight, Group, Mesh, PlaneGeometry, ShaderMaterial, Vector3, Color, PerspectiveCamera, DoubleSide, SphereGeometry, BackSide, AdditiveBlending } from 'three';
+import { DirectionalLight, AmbientLight, Group, Mesh, PlaneGeometry, ShaderMaterial, Vector3, Color, PerspectiveCamera, DoubleSide, SphereGeometry, BackSide, AdditiveBlending, BufferGeometry, BufferAttribute, PointsMaterial, Points } from 'three';
+import { WorldType } from '../types';
 
 export default class Sky extends Group {
   private sunMaterial!: ShaderMaterial;
@@ -7,10 +8,11 @@ export default class Sky extends Group {
   private moonMesh!: Mesh;
   private cloudsMaterial!: ShaderMaterial;
   private skyMaterial!: ShaderMaterial;
-  private directional!: DirectionalLight;
+  public directional!: DirectionalLight;
   public ambient!: AmbientLight;
+  public worldType: WorldType = WorldType.Standard;
 
-  private dayTime = Math.PI / 2; // Start at Midday
+  public dayTime = Math.PI / 2; // Start at Midday
   private readonly cycleSpeed = 0.05;
 
   constructor() {
@@ -25,6 +27,10 @@ export default class Sky extends Group {
     this.add(this.directional, this.ambient);
   }
 
+  public setWorldType(type: WorldType): void {
+    this.worldType = type;
+  }
+
   private initSkyDome(): void {
     const skyGeom = new SphereGeometry(2000, 32, 32);
     this.skyMaterial = new ShaderMaterial({
@@ -32,7 +38,9 @@ export default class Sky extends Group {
         uSunHeight: { value: 1.0 },
         uDayColor: { value: new Color(0x87CEEB) },
         uNightColor: { value: new Color(0x050510) },
-        uHorizonColor: { value: new Color(0xffa07a) }
+        uHorizonColor: { value: new Color(0xffa07a) },
+        uTime: { value: 0 },
+        uIsSpace: { value: 0.0 }
       },
       vertexShader: `
         varying vec3 vWorldPosition;
@@ -47,7 +55,15 @@ export default class Sky extends Group {
         uniform vec3 uDayColor;
         uniform vec3 uNightColor;
         uniform vec3 uHorizonColor;
+        uniform float uTime;
+        uniform float uIsSpace;
         varying vec3 vWorldPosition;
+
+        float hash(vec3 p) {
+            p = fract(p * 0.3183099 + .1);
+            p *= 17.0;
+            return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+        }
 
         void main() {
           vec3 viewDir = normalize(vWorldPosition);
@@ -57,6 +73,14 @@ export default class Sky extends Group {
           float sunHorizonEffect = pow(max(0.0, 1.0 - abs(uSunHeight)), 2.0);
           vec3 finalColor = mix(baseSky, uHorizonColor, horizonFactor * sunHorizonEffect * 0.8);
           finalColor = mix(finalColor, finalColor * 0.8, height);
+
+          // Starfield (Procedural)
+          float h = hash(floor(viewDir * 250.0));
+          float star = smoothstep(0.992, 1.0, h);
+          vec3 stars = vec3(star) * (0.8 + 0.2 * sin(uTime * 2.0 + h * 100.0));
+          
+          finalColor += stars * uIsSpace;
+
           gl_FragColor = vec4(finalColor, 1.0);
         }
       `,
@@ -65,8 +89,10 @@ export default class Sky extends Group {
 
     const skyMesh = new Mesh(skyGeom, this.skyMaterial);
     skyMesh.raycast = () => null;
+    skyMesh.renderOrder = -1; // Draw behind everything
     this.add(skyMesh);
   }
+
 
   private initSunAndMoon(): void {
     const sunGeom = new PlaneGeometry(100, 100);
@@ -171,20 +197,54 @@ export default class Sky extends Group {
     this.directional.position.copy(this.sunMesh.position);
     this.directional.intensity = Math.max(0, sunHeight * 1.5);
     
-    const daySkyColor = new Color(0x87CEEB);
-    const nightSkyColor = new Color(0x050510);
+    // Default colors
+    let daySkyColor = new Color(0x87CEEB);
+    let nightSkyColor = new Color(0x050510);
+    let horizonColor = new Color(0xffa07a);
+    let minAmbient = 0.5; // Increased globally for better night visibility
+    let cloudVisible = 0.6;
+    let starsVisible = Math.max(0, -sunHeight);
+    let moonVisible = true;
+
+    if (this.worldType === WorldType.Lunar) {
+        daySkyColor = nightSkyColor = new Color(0x000000);
+        minAmbient = 0.65; // High visibility for lunar surface
+        cloudVisible = 0.0;
+        starsVisible = 1.0; 
+        moonVisible = false; // Player is on the moon
+    } else if (this.worldType === WorldType.Jupyter) {
+        daySkyColor = new Color(0x442211);
+        nightSkyColor = new Color(0x111122);
+        horizonColor = new Color(0xaa4422);
+        minAmbient = 0.6;
+        cloudVisible = 0.8;
+        starsVisible = Math.max(0.2, -sunHeight);
+    }
+
     this.ambient.color.lerpColors(nightSkyColor, daySkyColor, Math.max(0, sunHeight));
-    this.ambient.intensity = isDay ? 0.6 : 0.2;
+    this.ambient.intensity = isDay ? 0.7 : minAmbient;
+    this.moonMesh.visible = moonVisible;
 
     this.sunMaterial.uniforms.uTime.value += 0.016;
     this.moonMaterial.uniforms.uTime.value += 0.016;
     this.cloudsMaterial.uniforms.uTime.value += 0.016;
+    
+    this.skyMaterial.uniforms.uTime.value += 0.01;
+    this.skyMaterial.uniforms.uIsSpace.value = starsVisible;
+
     this.skyMaterial.uniforms.uSunHeight.value = sunHeight;
+    this.skyMaterial.uniforms.uDayColor.value.copy(daySkyColor);
+    this.skyMaterial.uniforms.uNightColor.value.copy(nightSkyColor);
+    this.skyMaterial.uniforms.uHorizonColor.value.copy(horizonColor);
     
     this.sunMesh.lookAt(camera.position);
     this.moonMesh.lookAt(camera.position);
 
-    this.cloudsMaterial.uniforms.uColor.value.lerpColors(new Color(0x333333), new Color(0xffffff), Math.max(0, sunHeight));
+    let cloudColor = new Color(0xffffff);
+    if (this.worldType === WorldType.Jupyter) cloudColor = new Color(0xaa8844);
+    
+    this.cloudsMaterial.uniforms.uColor.value.lerpColors(new Color(0x333333).multiply(cloudColor), cloudColor, Math.max(0, sunHeight));
+    this.cloudsMaterial.visible = cloudVisible > 0.01;
   }
 
   public setTime(phase: string): void {
