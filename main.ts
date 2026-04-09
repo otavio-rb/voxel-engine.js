@@ -1,59 +1,127 @@
-import { getCamera, getScene, getRenderer, getStats } from './src/components';
-import ProceduralWorld from './src/classes/Worlds/ProceduralWorld';
-import Player from './src/classes/Player';
-import PlayerInteraction from './src/classes/PlayerInteraction';
-import UI from './src/classes/UI';
+import Stats from 'three/examples/jsm/libs/stats.module.js';
+import UI, { UIStats } from './src/classes/UI';
 import { WorldType } from './src/types';
 
 class Game {
-  private readonly scene    = getScene();
-  private readonly camera   = getCamera();
-  private readonly renderer = getRenderer();
-  private readonly stats    = getStats();
+  private readonly ui: UI;
+  private readonly stats: Stats;
+  private readonly worker: Worker;
+  private readonly canvas: HTMLCanvasElement;
 
-  private readonly player:      Player;
-  private readonly world:       ProceduralWorld;
-  private readonly interaction: PlayerInteraction;
-  private readonly ui:          UI;
+  private isLocked = false;
+  private isGenerating = false;
 
   constructor() {
-    const chunkSize     = this.loadSetting('chunkSize',     16);
-    const chunkHeight   = this.loadSetting('chunkHeight',   32);
-    const renderDistance = this.loadSetting('renderDistance', 8);
+    this.ui = new UI();
+    this.stats = new Stats();
+    this.stats.dom.id = 'stats-overlay';
+    document.body.appendChild(this.stats.dom);
 
-    this.world = new ProceduralWorld({ chunkSize, chunkHeight, renderDistance, camera: this.camera });
-    this.scene.add(this.world);
+    this.canvas = document.querySelector<HTMLCanvasElement>('#scene')!;
+    const offscreen = this.canvas.transferControlToOffscreen();
+
+    // Initialize the Render Worker
+    this.worker = new Worker(new URL('./src/Workers/RenderWorker.ts', import.meta.url), { type: 'module' });
     
-    this.ui = new UI({ renderer: this.renderer, camera: this.camera });
-    this.player = new Player({ camera: this.camera, ui: this.ui, world: this.world, mode: 'debug' });
-    this.ui.player = this.player;
+    this.worker.postMessage({
+      type: 'init',
+      payload: {
+        canvas: offscreen,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        pixelRatio: Math.min(window.devicePixelRatio, 2)
+      }
+    }, [offscreen]);
 
+    this.initEvents();
     this.initMenu();
-
-    // Pre-compile the chunk shader before chunks arrive so the first render
-    // doesn't stall the main thread with GLSL compilation.
-    this.world.warmUp(this.renderer, this.scene);
-
-    this.interaction = new PlayerInteraction(this.camera, this.world);
-
-    this.renderer.setAnimationLoop(() => this.loop());
   }
 
-  private loop(): void {
-    this.stats.begin();
+  private initEvents(): void {
+    // Resize
+    window.addEventListener('resize', () => {
+      this.worker.postMessage({
+        type: 'resize',
+        payload: { width: window.innerWidth, height: window.innerHeight }
+      });
+    });
 
-    this.player.update();
-    this.world.tick();
+    // Keyboard
+    document.addEventListener('keydown', e => {
+      if (document.activeElement?.tagName === 'INPUT') return;
+      if (e.key.toLowerCase() === ';') { e.preventDefault(); this.ui.toggleChat(); }
+      this.worker.postMessage({ type: 'keydown', payload: { key: e.key } });
+    });
 
-    this.renderer.render(this.scene, this.camera);
-    this.ui.update();
+    document.addEventListener('keyup', e => {
+      if (document.activeElement?.tagName === 'INPUT') return;
+      this.worker.postMessage({ type: 'keyup', payload: { key: e.key } });
+    });
 
-    this.stats.end();
-  }
+    // Mouse Movement
+    document.addEventListener('mousemove', e => {
+      if (!this.isLocked) return;
+      this.worker.postMessage({ 
+        type: 'mousemove', 
+        payload: { movementX: e.movementX, movementY: e.movementY } 
+      });
+    });
 
-  private loadSetting(key: string, fallback: number): number {
-    const raw = localStorage.getItem(key);
-    return raw !== null ? (JSON.parse(raw) as number) : fallback;
+    // Mouse Click (Raycast)
+    document.addEventListener('mousedown', e => {
+      // Only trigger block interactions on left click (button 0)
+      if (e.button !== 0) return;
+
+      const isChatInputFocused = document.activeElement?.classList.contains('chat-input');
+      if (!isChatInputFocused && !this.isLocked) {
+        this.canvas.requestPointerLock();
+      } else if (this.isLocked) {
+        this.worker.postMessage({ type: 'mousedown' });
+      }
+    });
+
+    // Pointer Lock changes
+    document.addEventListener('pointerlockchange', () => {
+      this.isLocked = document.pointerLockElement === this.canvas;
+      this.worker.postMessage({ type: 'lock_state', payload: { isLocked: this.isLocked } });
+      
+      if (!this.isLocked) {
+          const menu = document.getElementById('world-menu')!;
+          if (!this.ui.isChatOpen && !this.isGenerating) {
+             menu.classList.remove('hidden');
+          }
+      } else {
+        this.isGenerating = false;
+      }
+    });
+
+    // UI callbacks
+    this.ui.onToggle = (isOpen) => {
+      if (isOpen) {
+        document.exitPointerLock();
+      } else {
+        this.canvas.requestPointerLock();
+      }
+    };
+
+    this.ui.onCommand = (cmd, args) => {
+      this.worker.postMessage({ type: 'command', payload: { command: cmd, args } });
+    };
+
+    // Receive stats from worker
+    this.worker.onmessage = (e) => {
+      if (e.data.type === 'stats') {
+        this.stats.update();
+        const stats = e.data.stats as UIStats & { isUnderwater: boolean };
+        this.ui.update(stats);
+        
+        // Handle underwater overlay
+        const overlay = document.getElementById('underwater-overlay');
+        if (overlay) {
+            overlay.style.display = stats.isUnderwater ? 'block' : 'none';
+        }
+      }
+    };
   }
 
   private initMenu(): void {
@@ -73,32 +141,24 @@ class Game {
     });
 
     generateBtn.addEventListener('click', () => {
+      this.isGenerating = true;
       menuEl.classList.add('hidden');
       resumeBtn.style.display = 'block';
       
-      // Reset player position
-      this.player.teleport(0, 40, 0);
-      
-      // Reset world with new type
-      this.world.reset({ worldType: selectedType, seed: Math.floor(Math.random() * 1000000) });
+      // Delaying messages slightly to ensure the worker is ready and UI has settled
+      this.worker.postMessage({ type: 'command', payload: { command: '/start', args: [] } });
+      this.worker.postMessage({ type: 'command', payload: { command: '/spawn', args: [] } });
+      this.worker.postMessage({ type: 'command', payload: { command: '/regen', args: [selectedType] } });
 
+      this.canvas.requestPointerLock();
       
-      // Lock pointer
-      this.renderer.domElement.requestPointerLock();
+      // Fallback to reset isGenerating if pointer lock is denied
+      setTimeout(() => { if (!this.isLocked) this.isGenerating = false; }, 1000);
     });
 
     resumeBtn.addEventListener('click', () => {
       menuEl.classList.add('hidden');
-      this.renderer.domElement.requestPointerLock();
-    });
-
-    // Toggle menu with Escape if not typing in chat
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'm' || e.key === 'M') {
-         if (document.pointerLockElement !== this.renderer.domElement) {
-             menuEl.classList.toggle('hidden');
-         }
-      }
+      this.canvas.requestPointerLock();
     });
   }
 }

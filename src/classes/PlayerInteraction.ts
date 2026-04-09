@@ -17,13 +17,9 @@ export default class PlayerInteraction {
     private readonly world:  ProceduralWorld,
   ) {
     this.raycaster.far = REACH;
-    document.addEventListener('click', () => this.onLeftClick());
   }
 
-  private onLeftClick(): void {
-    // Only act when the pointer is locked (i.e. the player is in-game, not clicking to acquire lock).
-    if (!document.pointerLockElement) return;
-
+  public triggerClick(): void {
     this.raycaster.setFromCamera(this.center, this.camera);
 
     const meshes       = this.world.getChunkMeshes();

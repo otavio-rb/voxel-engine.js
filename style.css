@@ -155,6 +155,19 @@
   z-index: 0;
 }
 
+#underwater-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 120, 255, 0.45);
+  pointer-events: none;
+  z-index: 10;
+  display: none;
+  mix-blend-mode: color;
+}
+
 #crosshair {
   position: absolute;
   top: 50%;

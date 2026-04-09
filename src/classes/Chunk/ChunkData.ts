@@ -1,6 +1,6 @@
 import { SimplexNoise } from 'three/examples/jsm/Addons.js';
 import RNG from '../../utils/rng';
-import { BlockType, BlocksMap, ChunkDataResult, WorldParams, WorldType } from '../../types';
+import { BlockType, ChunkDataResult, WorldParams, WorldType } from '../../types';
 
 interface ChunkDataParams {
   size: number;
@@ -13,6 +13,7 @@ interface ChunkDataParams {
 }
 
 export default class ChunkData {
+  private readonly size: number;
   private readonly height: number;
   private readonly startX: number;
   private readonly endX: number;
@@ -21,9 +22,10 @@ export default class ChunkData {
   private readonly worldParams: WorldParams;
   private readonly simplex: SimplexNoise;
 
-  readonly blocks: BlocksMap = {};
+  readonly blocks: Int8Array;
 
-  constructor({ height, startX, endX, startZ, endZ, worldParams }: ChunkDataParams) {
+  constructor({ size, height, startX, endX, startZ, endZ, worldParams }: ChunkDataParams) {
+    this.size     = size;
     this.height   = height;
     this.startX   = startX;
     this.endX     = endX;
@@ -31,14 +33,30 @@ export default class ChunkData {
     this.endZ     = endZ;
     this.worldParams = worldParams;
 
+    this.blocks = new Int8Array(size * size * height).fill(-1);
+
     const rng = new RNG(worldParams.seed);
     this.simplex = new SimplexNoise(rng);
 
     this.generate();
   }
 
-  private key(x: number, y: number, z: number): string {
-    return `${x}.${y}.${z}`;
+  private idx(x: number, y: number, z: number): number {
+    if (y < 0 || y >= this.height || x < this.startX || x >= this.endX || z < this.startZ || z >= this.endZ) return -1;
+    return y * this.size * this.size + (z - this.startZ) * this.size + (x - this.startX);
+  }
+
+  private setBlock(x: number, y: number, z: number, type: BlockType): void {
+    const i = this.idx(x, y, z);
+    if (i !== -1) {
+        this.blocks[i] = type;
+    }
+  }
+
+  private getBlock(x: number, y: number, z: number): number {
+    const i = this.idx(x, y, z);
+    if (i === -1) return -1;
+    return this.blocks[i];
   }
 
   private generate(): void {
@@ -52,8 +70,8 @@ export default class ChunkData {
       case WorldType.Lunar:
         this.generateLunar();
         break;
-      case WorldType.Jupyter:
-        this.generateJupyter();
+      case WorldType.Mercury:
+        this.generateMercury();
         break;
       case WorldType.Standard:
       default:
@@ -70,7 +88,7 @@ export default class ChunkData {
           let type: BlockType = BlockType.Stone;
           if (y === height) type = BlockType.Grass;
           else if (y > height - 3) type = BlockType.Dirt;
-          this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+          this.setBlock(x, y, z, type);
         }
       }
     }
@@ -123,7 +141,7 @@ export default class ChunkData {
             const depthFactor = Math.max(0.1, (sy - y) / 10.0);
             const caveThreshold = 0.08 * Math.min(1.0, depthFactor);
             if (Math.abs(caveNoise) < caveThreshold && y < sy) {
-                if (y <= seaLevel) this.blocks[this.key(x, y, z)] = { type: BlockType.Water, position: { x, y, z } };
+                if (y <= seaLevel) this.setBlock(x, y, z, BlockType.Water);
                 continue;
             }
 
@@ -144,10 +162,10 @@ export default class ChunkData {
                     else if (oreRand < -0.85) type = BlockType.Iron;
                 }
             }
-            this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+            this.setBlock(x, y, z, type);
 
           } else if (isWater) {
-             this.blocks[this.key(x, y, z)] = { type: BlockType.Water, position: { x, y, z } };
+             this.setBlock(x, y, z, BlockType.Water);
           }
         }
       }
@@ -218,14 +236,14 @@ export default class ChunkData {
                     const distCenter = Math.abs(x - curTX) + Math.abs(z - curTZ);
                     
                     if (distCenter <= 1) {
-                        this.blocks[this.key(x, y, z)] = { type: BlockType.Wood, position: { x, y, z } };
+                        this.setBlock(x, y, z, BlockType.Wood);
                     }
                     
                     // Roots system
                     if (y === baseSY + 1 && (distCenter === 2 || (distCenter === 1 && progress > 0.5))) {
                         const rootSeed = this.simplex.noise3d(x*5, y*5, z*5);
                         if (rootSeed > 0.2) {
-                            this.blocks[this.key(x, y, z)] = { type: BlockType.Wood, position: { x, y, z } };
+                            this.setBlock(x, y, z, BlockType.Wood);
                         }
                     }
                   }
@@ -237,10 +255,10 @@ export default class ChunkData {
                   const leafR = 5.0 + jitter;
                   
                   if (distSq < leafR * leafR) {
-                      const k = this.key(x, y, z);
+                      const cur = this.getBlock(x, y, z);
                       // Don't overwrite trunk or terrain if it was already set
-                      if (!this.blocks[k] || this.blocks[k].type === BlockType.Water) {
-                          this.blocks[k] = { type: BlockType.Leaves, position: { x, y, z } };
+                      if (cur === -1 || cur === BlockType.Water) {
+                          this.setBlock(x, y, z, BlockType.Leaves);
                       }
                   }
                 }
@@ -264,7 +282,7 @@ export default class ChunkData {
             let type = BlockType.Stone;
             if (y < 5) type = BlockType.Water;
             if (noise > 0.7) type = BlockType.Coal;
-            this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+            this.setBlock(x, y, z, type);
           }
         }
       }
@@ -295,31 +313,44 @@ export default class ChunkData {
         for (let y = 0; y <= sy; y++) {
           let type = BlockType.Stone;
           if (y === sy && noise > 0.5) type = BlockType.Snow; // Grayish dust/snow/sand
-          this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+          this.setBlock(x, y, z, type);
         }
       }
     }
   }
 
-  private generateJupyter(): void {
+  private generateMercury(): void {
     for (let x = this.startX; x < this.endX; x++) {
       for (let z = this.startZ; z < this.endZ; z++) {
-        const baseNoise = this.octaveBaseNoise(x, z, 5.0, 4);
-        const surfaceY = Math.floor(this.height * (0.2 + 0.3 * baseNoise));
+        // Base terrain noise - Very rugged
+        const baseNoise = this.octaveBaseNoise(x, z, 3.0, 5);
+        const detailNoise = this.octaveBaseNoise(x + 500, z + 500, 0.5, 3);
+        let surfaceY = Math.floor(this.height * (0.2 + 0.4 * (baseNoise * 0.7 + detailNoise * 0.3)));
+
+        // Large craters
+        const craterFreq = 64;
+        const cx = Math.floor(x / craterFreq) * craterFreq + craterFreq/2;
+        const cz = Math.floor(z / craterFreq) * craterFreq + craterFreq/2;
+        const distToCrater = Math.sqrt((x - cx) ** 2 + (z - cz) ** 2);
+        
+        if (distToCrater < 16) {
+           const depth = (16 - distToCrater) * 0.8;
+           surfaceY -= Math.floor(depth);
+        }
+
+        surfaceY = Math.max(1, Math.min(surfaceY, this.height - 1));
 
         for (let y = 0; y < this.height; y++) {
           if (y <= surfaceY) {
-            let type = BlockType.Sand; // Orange/Red surface
-            if (y < surfaceY - 5) type = BlockType.Stone;
-            this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
-          } else {
-            // "Gas" layers / Clouds
-            const gasNoise = this.simplex.noise3d(x / 32, y / 8, z / 32);
-            if (gasNoise > 0.6) {
-                let type = BlockType.Leaves; // Greenish/Colorful gas
-                if (y > this.height * 0.7) type = BlockType.Snow; // High white clouds
-                this.blocks[this.key(x, y, z)] = { type, position: { x, y, z } };
+            let type = BlockType.Stone;
+            if (y === surfaceY) {
+                const rand = this.simplex.noise3d(x/10, y/10, z/10);
+                if (rand > 0.4) type = BlockType.Coal; // Scorched spots
+                else if (rand < -0.4) type = BlockType.Sand; // Sulfuric/Dusty spots
+            } else if (y < surfaceY - 4) {
+                type = BlockType.Coal; // Deep basalt
             }
+            this.setBlock(x, y, z, type);
           }
         }
       }
