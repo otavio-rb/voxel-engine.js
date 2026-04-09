@@ -67,7 +67,7 @@ export interface WorldParams {
 }
 
 export interface ChunkJobData {
-  chunkKey: string;
+  chunkKey: number;
   size: number;
   height: number;
   startX: number;
@@ -88,6 +88,7 @@ export interface GeometryData {
   uvs:       Float32Array;
   colors:    Float32Array;
   isWater:   Float32Array;
+  creationTime: Float32Array;
   vertices:  Uint32Array;
 }
 
@@ -99,10 +100,24 @@ export interface ChunkDataResult {
   blocks: BlocksMap;
 }
 
+/** One-block-wide border slices cached per chunk to avoid O(n) iteration on every rebuild. */
+export interface ChunkBorders {
+  /** Blocks at x === startX (exposed toward the -X neighbour). */
+  negX: BlocksMap;
+  /** Blocks at x === endX - 1 (exposed toward the +X neighbour). */
+  posX: BlocksMap;
+  /** Blocks at z === startZ (exposed toward the -Z neighbour). */
+  negZ: BlocksMap;
+  /** Blocks at z === endZ - 1 (exposed toward the +Z neighbour). */
+  posZ: BlocksMap;
+}
+
 export interface WorkerResponse {
-  chunkKey: string;
+  chunkKey: number;
   chunkData: ChunkDataResult;
-  geometry: GeometryData;
+  borders: ChunkBorders;
+  opaque: GeometryData;
+  water: GeometryData;
 }
 
 export interface WorldConfig {

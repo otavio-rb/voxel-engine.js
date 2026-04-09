@@ -2,7 +2,7 @@ import { PerspectiveCamera, Scene, WebGLRenderer, Color, Fog } from 'three';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 
 export function getCamera(): PerspectiveCamera {
-  const camera = new PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+  const camera = new PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -15,8 +15,6 @@ export function getCamera(): PerspectiveCamera {
 
 export function getScene(): Scene {
   const scene = new Scene();
-  scene.background = new Color(0x87CEEB);
-  scene.fog = new Fog(0x87CEEB, 100, 600);
   return scene;
 }
 
@@ -38,6 +36,7 @@ export function getRenderer(): WebGLRenderer {
 
 export function getStats(): Stats {
   const stats = new Stats();
+  stats.dom.id = 'stats-overlay';
   document.body.appendChild(stats.dom);
   return stats;
 }

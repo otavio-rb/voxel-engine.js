@@ -18,8 +18,8 @@ class Game {
 
   constructor() {
     const chunkSize     = this.loadSetting('chunkSize',     16);
-    const chunkHeight   = this.loadSetting('chunkHeight',   1);
-    const renderDistance = this.loadSetting('renderDistance', 12);
+    const chunkHeight   = this.loadSetting('chunkHeight',   32);
+    const renderDistance = this.loadSetting('renderDistance', 8);
 
     this.world = new ProceduralWorld({ chunkSize, chunkHeight, renderDistance, camera: this.camera });
     this.scene.add(this.world);
@@ -76,11 +76,12 @@ class Game {
       menuEl.classList.add('hidden');
       resumeBtn.style.display = 'block';
       
-      // Reset world with new type
-      this.world.reset({ worldType: selectedType, seed: Math.floor(Math.random() * 1000000) });
-      
       // Reset player position
       this.player.teleport(0, 40, 0);
+      
+      // Reset world with new type
+      this.world.reset({ worldType: selectedType, seed: Math.floor(Math.random() * 1000000) });
+
       
       // Lock pointer
       this.renderer.domElement.requestPointerLock();

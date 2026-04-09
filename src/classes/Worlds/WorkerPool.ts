@@ -39,7 +39,7 @@ export default class WorkerPool {
   }
 
   /** Cancel all pending (queued) jobs for a specific chunk key. */
-  cancel(chunkKey: string): void {
+  cancel(chunkKey: number): void {
     const idx = this.queue.findIndex(j => j.data.chunkKey === chunkKey);
     if (idx !== -1) this.queue.splice(idx, 1);
   }

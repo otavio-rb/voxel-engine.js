@@ -98,7 +98,7 @@ export default class ChunkData {
     for (let x = this.startX; x < this.endX; x++) {
       for (let z = this.startZ; z < this.endZ; z++) {
         const sy = surfaceOf.get(colIdx(x, z))!;
-        const maxVisibleY = Math.min(this.height, Math.max(sy, seaLevel) + 30); // Extends even higher for majestic trees
+        const maxVisibleY = Math.min(this.height, Math.max(sy, seaLevel) + 2); // Terrain only needs a small buffer
         const temperature = this.octaveBaseNoise(x + 1234, z + 5678, 10.0, 2);
 
         for (let y = 0; y <= maxVisibleY; y++) {
@@ -149,87 +149,108 @@ export default class ChunkData {
           } else if (isWater) {
              this.blocks[this.key(x, y, z)] = { type: BlockType.Water, position: { x, y, z } };
           }
+        }
+      }
+    }
 
-          // ── Pass 3: Trees (Scatter) ──
-          // Trees spawn on temperate Grass biomes only
-          if (sy > seaLevel && sy < this.height * 0.7) {
-             const grid = 12; // Increased spacing for cleaner forests
-             
-             // Check a 3x3 grid of possible tree centers to avoid clipping
-             for (let ox = -1; ox <= 1; ox++) {
-               for (let oz = -1; oz <= 1; oz++) {
-                  const tx = (Math.floor(x / grid) + ox) * grid + grid/2;
-                  const tz = (Math.floor(z / grid) + oz) * grid + grid/2;
+    // ── Pass 3: Trees (Scatter) ──
+    const grid = 12;      // Spacing between tree candidates
+    const searchPad = 10; // Max reach of a tree from its center
+    
+    // Iterate over all tree cells that could affect this chunk
+    const tStartX = Math.floor((this.startX - searchPad) / grid);
+    const tEndX   = Math.ceil((this.endX + searchPad) / grid);
+    const tStartZ = Math.floor((this.startZ - searchPad) / grid);
+    const tEndZ   = Math.ceil((this.endZ + searchPad) / grid);
+
+    for (let gx = tStartX; gx <= tEndX; gx++) {
+      for (let gz = tStartZ; gz <= tEndZ; gz++) {
+        const tx = gx * grid + grid / 2;
+        const tz = gz * grid + grid / 2;
+        
+        // Consistent tree check based on tree center
+        const treeSeed = this.octaveBaseNoise(tx + 777, tz + 888, 1.0, 1);
+        if (treeSeed > 0.45) {
+          const tVal = this.octaveBaseNoise(tx, tz, 4.0, 4) * 0.8;
+          const baseSY = Math.floor(this.height * (0.3 + 0.5 * tVal));
+          const tempAtBase = this.getTemperatureAt(tx, tz);
+
+          // Tree existence conditions
+          if (tempAtBase > -0.3 && tempAtBase < 0.3 && baseSY > seaLevel + 1) {
+            const trunkH = 8 + Math.floor(treeSeed * 20) % 8;
+            const tiltMag = (treeSeed * 3.5);
+            const tiltAngle = treeSeed * Math.PI * 100.0;
+            
+            const endTX = tx + Math.cos(tiltAngle) * tiltMag;
+            const endTZ = tz + Math.sin(tiltAngle) * tiltMag;
+            const cx = endTX, cy = baseSY + trunkH, cz = endTZ;
+            
+            // Influence radius (max possible leaf reach)
+            const influence = 8;
+            const treeMinX = Math.floor(Math.min(tx, endTX) - influence);
+            const treeMaxX = Math.ceil(Math.max(tx, endTX) + influence);
+            const treeMinZ = Math.floor(Math.min(tz, endTZ) - influence);
+            const treeMaxZ = Math.ceil(Math.max(tz, endTZ) + influence);
+
+            // Intersect with current chunk
+            const workStartX = Math.max(this.startX, treeMinX);
+            const workEndX   = Math.min(this.endX,   treeMaxX);
+            const workStartZ = Math.max(this.startZ, treeMinZ);
+            const workEndZ   = Math.min(this.endZ,   treeMaxZ);
+
+            if (workStartX >= workEndX || workStartZ >= workEndZ) continue;
+
+            for (let x = workStartX; x < workEndX; x++) {
+              for (let z = workStartZ; z < workEndZ; z++) {
+                // Determine vertical range for trunk + canopy
+                const minY = Math.max(1, baseSY);
+                const maxY = Math.min(this.height - 1, Math.round(cy + 8));
+
+                for (let y = minY; y <= maxY; y++) {
+                  // 1. Organic Trunk & Root Check
+                  if (y > baseSY && y <= cy) {
+                    const progress = (y - baseSY) / trunkH;
+                    const curve = Math.pow(progress, 1.5); 
+                    
+                    const curTX = Math.round(tx + Math.cos(tiltAngle) * tiltMag * curve);
+                    const curTZ = Math.round(tz + Math.sin(tiltAngle) * tiltMag * curve);
+                    
+                    const distCenter = Math.abs(x - curTX) + Math.abs(z - curTZ);
+                    
+                    if (distCenter <= 1) {
+                        this.blocks[this.key(x, y, z)] = { type: BlockType.Wood, position: { x, y, z } };
+                    }
+                    
+                    // Roots system
+                    if (y === baseSY + 1 && (distCenter === 2 || (distCenter === 1 && progress > 0.5))) {
+                        const rootSeed = this.simplex.noise3d(x*5, y*5, z*5);
+                        if (rootSeed > 0.2) {
+                            this.blocks[this.key(x, y, z)] = { type: BlockType.Wood, position: { x, y, z } };
+                        }
+                    }
+                  }
                   
-                  const treeSeed = this.octaveBaseNoise(tx + 777, tz + 888, 1.0, 1);
-                  if (treeSeed > 0.45) { // Consistent probability
-                      const tVal = this.octaveBaseNoise(tx, tz, 4.0, 4) * 0.8;
-                      const baseSY = Math.floor(this.height * (0.3 + 0.5 * tVal));
-                      const tempAtBase = this.getTemperatureAt(tx, tz);
-
-                      if (tempAtBase > -0.3 && tempAtBase < 0.3 && baseSY > seaLevel + 1) {
-                          const trunkH = 8 + Math.floor(treeSeed * 20) % 8; // 8 to 15 blocks
-                          
-                          // Organic bend/tilt calculation
-                          const tiltMag = (treeSeed * 3.5); // Up to 3.5 blocks of tilt at the top
-                          const tiltAngle = treeSeed * Math.PI * 100.0;
-                          
-                          const endTX = tx + Math.cos(tiltAngle) * tiltMag;
-                          const endTZ = tz + Math.sin(tiltAngle) * tiltMag;
-                          
-                          const cx = endTX, cy = baseSY + trunkH, cz = endTZ;
-                          
-                          // 1. Organic Trunk & Root Check
-                          if (y > baseSY && y <= cy) {
-                              const progress = (y - baseSY) / trunkH;
-                              
-                              // Power curve for natural bending (starts straight, bends at top)
-                              const curve = Math.pow(progress, 1.5); 
-                              
-                              const curTX = Math.round(tx + Math.cos(tiltAngle) * tiltMag * curve);
-                              const curTZ = Math.round(tz + Math.sin(tiltAngle) * tiltMag * curve);
-                              
-                              const distCenter = Math.abs(x - curTX) + Math.abs(z - curTZ);
-                              
-                              // Main trunk core: Thicker (cross pattern) for the entire height
-                              if (distCenter <= 1) {
-                                  this.blocks[this.key(x, y, z)] = { type: BlockType.Wood, position: { x, y, z } };
-                              }
-                              
-                              // Advanced Root system: extends even further out at the very base
-                              if (y === baseSY + 1) {
-                                  // Roots sprout from the corners or ends of the thick base
-                                  if (distCenter === 2 || (distCenter === 1 && progress > 0.5)) {
-                                      const rootSeed = this.simplex.noise3d(x*5, y*5, z*5);
-                                      if (rootSeed > 0.2) {
-                                          this.blocks[this.key(x, y, z)] = { type: BlockType.Wood, position: { x, y, z } };
-                                      }
-                                  }
-                              }
-                          }
-                          
-                          // 2. Spherical Canopy Check with Linear Randomization
-                          const dx = x - cx, dy = y - cy, dz = z - cz;
-                          const distSq = dx * dx + (dy * dy / 0.6) + dz * dz;
-                          
-                          // Use a bit of local noise for a jittery/organic leaf edge
-                          const jitter = this.simplex.noise3d(x/3.0, y/3.0, z/3.0) * 0.8;
-                          const leafR = 5.0 + jitter; // Larger sphere radius
-                          
-                          if (distSq < leafR * leafR) {
-                              const k = this.key(x, y, z);
-                              if (!this.blocks[k]) {
-                                  this.blocks[k] = { type: BlockType.Leaves, position: { x, y, z } };
-                              }
-                          }
+                  // 2. Spherical Canopy Check
+                  const dx = x - cx, dy = y - cy, dz = z - cz;
+                  const distSq = dx * dx + (dy * dy / 0.6) + dz * dz;
+                  const jitter = this.simplex.noise3d(x/3.0, y/3.0, z/3.0) * 0.8;
+                  const leafR = 5.0 + jitter;
+                  
+                  if (distSq < leafR * leafR) {
+                      const k = this.key(x, y, z);
+                      // Don't overwrite trunk or terrain if it was already set
+                      if (!this.blocks[k] || this.blocks[k].type === BlockType.Water) {
+                          this.blocks[k] = { type: BlockType.Leaves, position: { x, y, z } };
                       }
                   }
-               }
-             }
+                }
+              }
+            }
           }
         }
       }
     }
+
   }
 
   private generateCavern(): void {
