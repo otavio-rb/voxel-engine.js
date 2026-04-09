@@ -1,6 +1,6 @@
 import ChunkData from '../classes/Chunk/ChunkData';
 import ChunkGeometry from '../classes/Chunk/ChunkGeometry';
-import { ChunkDataResult, ChunkJobData, WorkerResponse } from '../types';
+import { ChunkDataResult, ChunkJobData, WorkerResponse, ChunkBorders, BlocksMap } from '../types';
 
 self.onmessage = (e: MessageEvent<ChunkJobData>): void => {
   const job = e.data;
@@ -23,18 +23,50 @@ self.onmessage = (e: MessageEvent<ChunkJobData>): void => {
   const response: WorkerResponse = {
     chunkKey:  job.chunkKey,
     chunkData: chunkDataResult,
-    geometry,
+    borders:   computeBorders(chunkDataResult),
+    opaque:    geometry.opaque,
+    water:     geometry.water,
   };
 
   // Transfer the ArrayBuffers instead of copying them (zero-copy).
   // Once transferred, the worker can no longer access these buffers.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (self as any).postMessage(response, [
-    geometry.positions.buffer,
-    geometry.normals.buffer,
-    geometry.uvs.buffer,
-    geometry.colors.buffer,
-    geometry.isWater.buffer,
-    geometry.vertices.buffer,
-  ]);
+  const transferables: ArrayBuffer[] = [
+    geometry.opaque.positions.buffer,
+    geometry.opaque.normals.buffer,
+    geometry.opaque.uvs.buffer,
+    geometry.opaque.colors.buffer,
+    geometry.opaque.isWater.buffer,
+    geometry.opaque.creationTime.buffer,
+    geometry.opaque.vertices.buffer,
+    geometry.water.positions.buffer,
+    geometry.water.normals.buffer,
+    geometry.water.uvs.buffer,
+    geometry.water.colors.buffer,
+    geometry.water.isWater.buffer,
+    geometry.water.creationTime.buffer,
+    geometry.water.vertices.buffer,
+  ];
+
+  (self as any).postMessage(response, transferables);
 };
+
+function computeBorders(data: ChunkDataResult): ChunkBorders {
+    const maxX = data.endX - 1;
+    const maxZ = data.endZ - 1;
+    const negX: BlocksMap = {};
+    const posX: BlocksMap = {};
+    const negZ: BlocksMap = {};
+    const posZ: BlocksMap = {};
+
+    for (const k in data.blocks) {
+      const b  = data.blocks[k];
+      const bx = b.position.x;
+      const bz = b.position.z;
+      if (bx === data.startX) negX[k] = b;
+      if (bx === maxX)        posX[k] = b;
+      if (bz === data.startZ) negZ[k] = b;
+      if (bz === maxZ)        posZ[k] = b;
+    }
+
+    return { negX, posX, negZ, posZ };
+}
