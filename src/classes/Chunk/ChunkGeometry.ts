@@ -25,10 +25,10 @@ export default class ChunkGeometry {
       nx: number, ny: number, nz: number, 
       blocks: Int8Array, 
       borders: ChunkBorders, 
-      startX: number, startZ: number, 
-      size: number, height: number
+      startX: number, startY: number, startZ: number, 
+      size: number
   ): number {
-      const type = this.getNeighbourBlock(nx, ny, nz, blocks, borders, startX, startZ, size, height);
+      const type = this.getNeighbourBlock(nx, ny, nz, blocks, borders, startX, startY, startZ, size);
       return (type !== -1 && type !== BlockType.Empty && type !== BlockType.Water) ? 1 : 0;
   }
 
@@ -43,8 +43,8 @@ export default class ChunkGeometry {
       corners: any[],
       blocks: Int8Array,
       borders: ChunkBorders,
-      startX: number, startZ: number,
-      size: number, height: number
+      startX: number, startY: number, startZ: number,
+      size: number
   ): number[] {
     const aoValues: number[] = [];
     
@@ -62,9 +62,9 @@ export default class ChunkGeometry {
         o1[perp1] = cpos[perp1] === 0 ? -1 : 1;
         o2[perp2] = cpos[perp2] === 0 ? -1 : 1;
         
-        const side1 = this.isSolid(x + dir[0] + o1[0], y + dir[1] + o1[1], z + dir[2] + o1[2], blocks, borders, startX, startZ, size, height);
-        const side2 = this.isSolid(x + dir[0] + o2[0], y + dir[1] + o2[1], z + dir[2] + o2[2], blocks, borders, startX, startZ, size, height);
-        const cornerVal = this.isSolid(x + dir[0] + o1[0] + o2[0], y + dir[1] + o1[1] + o2[1], z + dir[2] + o1[2] + o2[2], blocks, borders, startX, startZ, size, height);
+        const side1 = this.isSolid(x + dir[0] + o1[0], y + dir[1] + o1[1], z + dir[2] + o1[2], blocks, borders, startX, startY, startZ, size);
+        const side2 = this.isSolid(x + dir[0] + o2[0], y + dir[1] + o2[1], z + dir[2] + o2[2], blocks, borders, startX, startY, startZ, size);
+        const cornerVal = this.isSolid(x + dir[0] + o1[0] + o2[0], y + dir[1] + o1[1] + o2[1], z + dir[2] + o1[2] + o2[2], blocks, borders, startX, startY, startZ, size);
         
         aoValues.push(this.vertexAO(side1, side2, cornerVal));
     }
@@ -76,50 +76,55 @@ export default class ChunkGeometry {
       nx: number, ny: number, nz: number, 
       blocks: Int8Array, 
       borders: ChunkBorders, 
-      startX: number, startZ: number, 
-      size: number, height: number
+      startX: number, startY: number, startZ: number, 
+      size: number
   ): number {
-      if (ny < 0 || ny >= height) return -1;
-      
       const lx = nx - startX;
+      const ly = ny - startY;
       const lz = nz - startZ;
 
       // Check locally
-      if (lx >= 0 && lx < size && lz >= 0 && lz < size) {
-          return blocks[ny * size * size + lz * size + lx];
+      if (lx >= 0 && lx < size && ly >= 0 && ly < size && lz >= 0 && lz < size) {
+          return blocks[ly * size * size + lz * size + lx];
       }
       
       // Check borders
-      if (lx === -1 && borders.negX && lz >= 0 && lz < size) {
-          return borders.negX[ny * size + lz];
+      if (lx === -1 && borders.negX && ly >= 0 && ly < size && lz >= 0 && lz < size) {
+          return borders.negX[ly * size + lz];
       }
-      if (lx === size && borders.posX && lz >= 0 && lz < size) {
-          return borders.posX[ny * size + lz];
+      if (lx === size && borders.posX && ly >= 0 && ly < size && lz >= 0 && lz < size) {
+          return borders.posX[ly * size + lz];
       }
-      if (lz === -1 && borders.negZ && lx >= 0 && lx < size) {
-          return borders.negZ[ny * size + lx];
+      if (ly === -1 && borders.negY && lx >= 0 && lx < size && lz >= 0 && lz < size) {
+          return borders.negY[lz * size + lx];
       }
-      if (lz === size && borders.posZ && lx >= 0 && lx < size) {
-          return borders.posZ[ny * size + lx];
+      if (ly === size && borders.posY && lx >= 0 && lx < size && lz >= 0 && lz < size) {
+          return borders.posY[lz * size + lx];
+      }
+      if (lz === -1 && borders.negZ && lx >= 0 && lx < size && ly >= 0 && ly < size) {
+          return borders.negZ[ly * size + lx];
+      }
+      if (lz === size && borders.posZ && lx >= 0 && lx < size && ly >= 0 && ly < size) {
+          return borders.posZ[ly * size + lx];
       }
   
       return -1;
   }
 
   private build(chunkData: ChunkDataResult, neighbourBorderBlocks: ChunkBorders): void {
-    const { blocks, startX, startZ, endX, endZ } = chunkData;
+    const { blocks, startX, startY, startZ, endX } = chunkData;
     const size = endX - startX;
-    const height = blocks.length / (size * size);
 
-    for (let y = 0; y < height; y++) {
+    for (let ly = 0; ly < size; ly++) {
       for (let lz = 0; lz < size; lz++) {
         for (let lx = 0; lx < size; lx++) {
-          const idx = y * size * size + lz * size + lx;
+          const idx = ly * size * size + lz * size + lx;
           const type = blocks[idx];
           
           if (type === -1 || type === BlockType.Empty) continue;
 
           const x = startX + lx;
+          const y = startY + ly;
           const z = startZ + lz;
 
           const def = blockTypes[type as BlockType];
@@ -137,7 +142,7 @@ export default class ChunkGeometry {
             const ny = y + dir[1];
             const nz = z + dir[2];
             
-            const nType = this.getNeighbourBlock(nx, ny, nz, blocks, neighbourBorderBlocks, startX, startZ, size, height);
+            const nType = this.getNeighbourBlock(nx, ny, nz, blocks, neighbourBorderBlocks, startX, startY, startZ, size);
 
             if (nType !== -1 && nType !== BlockType.Empty) {
                 const isNeighbourWater = nType === BlockType.Water;
@@ -157,7 +162,7 @@ export default class ChunkGeometry {
             const targetAo = isWater ? this.waterAo : this.opaqueAo;
 
             const baseIdx = targetPos.length / 3;
-            const ao = this.getAOValues(x, y, z, dir as any, corners, blocks, neighbourBorderBlocks, startX, startZ, size, height);
+            const ao = this.getAOValues(x, y, z, dir as any, corners, blocks, neighbourBorderBlocks, startX, startY, startZ, size);
 
             for (let i = 0; i < 4; i++) {
               const { pos, uv } = corners[i];
