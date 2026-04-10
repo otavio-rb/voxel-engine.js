@@ -7,6 +7,8 @@ interface ChunkDataParams {
   height: number;
   startX: number;
   endX: number;
+  startY: number;
+  endY: number;
   startZ: number;
   endZ: number;
   worldParams: WorldParams;
@@ -14,9 +16,10 @@ interface ChunkDataParams {
 
 export default class ChunkData {
   private readonly size: number;
-  private readonly height: number;
   private readonly startX: number;
   private readonly endX: number;
+  private readonly startY: number;
+  private readonly endY: number;
   private readonly startZ: number;
   private readonly endZ: number;
   private readonly worldParams: WorldParams;
@@ -24,16 +27,17 @@ export default class ChunkData {
 
   readonly blocks: Int8Array;
 
-  constructor({ size, height, startX, endX, startZ, endZ, worldParams }: ChunkDataParams) {
+  constructor({ size, startX, endX, startY, endY, startZ, endZ, worldParams }: ChunkDataParams) {
     this.size     = size;
-    this.height   = height;
     this.startX   = startX;
     this.endX     = endX;
+    this.startY   = startY;
+    this.endY     = endY;
     this.startZ   = startZ;
     this.endZ     = endZ;
     this.worldParams = worldParams;
 
-    this.blocks = new Int8Array(size * size * height).fill(-1);
+    this.blocks = new Int8Array(size * size * size).fill(-1);
 
     const rng = new RNG(worldParams.seed);
     this.simplex = new SimplexNoise(rng);
@@ -42,8 +46,8 @@ export default class ChunkData {
   }
 
   private idx(x: number, y: number, z: number): number {
-    if (y < 0 || y >= this.height || x < this.startX || x >= this.endX || z < this.startZ || z >= this.endZ) return -1;
-    return y * this.size * this.size + (z - this.startZ) * this.size + (x - this.startX);
+    if (y < this.startY || y >= this.endY || x < this.startX || x >= this.endX || z < this.startZ || z >= this.endZ) return -1;
+    return (y - this.startY) * this.size * this.size + (z - this.startZ) * this.size + (x - this.startX);
   }
 
   private setBlock(x: number, y: number, z: number, type: BlockType): void {
@@ -84,7 +88,8 @@ export default class ChunkData {
     const height = 20;
     for (let x = this.startX; x < this.endX; x++) {
       for (let z = this.startZ; z < this.endZ; z++) {
-        for (let y = 0; y <= height; y++) {
+        for (let y = this.startY; y < this.endY; y++) {
+          if (y > height) continue;
           let type: BlockType = BlockType.Stone;
           if (y === height) type = BlockType.Grass;
           else if (y > height - 3) type = BlockType.Dirt;
@@ -95,7 +100,8 @@ export default class ChunkData {
   }
 
   private generateStandard(): void {
-    const seaLevel = Math.floor(this.height * 0.25);
+    const globalHeight = 128;
+    const seaLevel = Math.floor(globalHeight * 0.25);
     const surfaceOf = new Map<number, number>();
     const colIdx = (x: number, z: number) => x * 100_000 + z;
 
@@ -104,8 +110,8 @@ export default class ChunkData {
       for (let z = this.startZ; z < this.endZ; z++) {
         const contNoise = this.octaveBaseNoise(x, z, 4.0, 4); 
         const detailNoise = this.octaveBaseNoise(x + 500, z + 500, 0.4, 3);
-        let sy = Math.floor(this.height * (0.3 + 0.5 * (contNoise * 0.8 + detailNoise * 0.2)));
-        sy = Math.max(0, Math.min(sy, this.height));
+        let sy = Math.floor(globalHeight * (0.3 + 0.5 * (contNoise * 0.8 + detailNoise * 0.2)));
+        sy = Math.max(0, Math.min(sy, globalHeight));
         surfaceOf.set(colIdx(x, z), sy);
       }
     }
@@ -116,42 +122,52 @@ export default class ChunkData {
     for (let x = this.startX; x < this.endX; x++) {
       for (let z = this.startZ; z < this.endZ; z++) {
         const sy = surfaceOf.get(colIdx(x, z))!;
-        const maxVisibleY = Math.min(this.height, Math.max(sy, seaLevel) + 2); // Terrain only needs a small buffer
+        
+        // Fast paths: chunk entirely above terrain
+        if (this.startY > sy && this.startY > seaLevel) continue;
+        
+        const localMaxY = Math.min(this.endY - 1, Math.max(sy, seaLevel) + 2);
         const temperature = this.octaveBaseNoise(x + 1234, z + 5678, 10.0, 2);
 
-        for (let y = 0; y <= maxVisibleY; y++) {
+        for (let y = this.startY; y <= localMaxY; y++) {
           const isTerrain = y <= sy;
           const isWater   = !isTerrain && y <= seaLevel;
 
-          // Culling (Simple)
-          const topSolid    = y < maxVisibleY;
-          const leftSolid   = (surfaceAt(x - 1, z) >= y) || (y <= seaLevel);
-          const rightSolid  = (surfaceAt(x + 1, z) >= y) || (y <= seaLevel);
-          const frontSolid  = (surfaceAt(x, z - 1) >= y) || (y <= seaLevel);
-          const backSolid   = (surfaceAt(x, z + 1) >= y) || (y <= seaLevel);
-          const bottomSolid = y > 0;
-
-          if (isTerrain && topSolid && leftSolid && rightSolid && frontSolid && backSolid && bottomSolid) {
-              if (y < sy) continue;
-          }
-
           if (isTerrain) {
-            // Cave carving
-            const caveNoise = this.simplex.noise3d(x / 32, y / 16, z / 32);
-            const depthFactor = Math.max(0.1, (sy - y) / 10.0);
-            const caveThreshold = 0.08 * Math.min(1.0, depthFactor);
-            if (Math.abs(caveNoise) < caveThreshold && y < sy) {
-                if (y <= seaLevel) this.setBlock(x, y, z, BlockType.Water);
-                continue;
+            // ── Cave & Chamber System ──
+            const noiseScale = 48; // Larger tunnels
+            // Isotropic noise (same scale for y) so tunnels don't get squished horizontally
+            const nA = this.simplex.noise3d(x / noiseScale, y / noiseScale, z / noiseScale);
+            const nB = this.simplex.noise3d((x + 1000) / noiseScale, (y + 1000) / noiseScale, (z + 1000) / noiseScale);
+            const nMask = this.simplex.noise3d(x / 128, y / 128, z / 128); // Larger masking scale so caves go deeper
+            
+            // Spaghetti Caves (intersection of two noise fields)
+            const spaghetti = Math.abs(nA) + Math.abs(nB);
+            const caveThreshold = 0.12 * (nMask + 0.5); // Mask fluctuates thickness
+            
+            // Larger Rooms
+            const chamberThreshold = -0.7;
+            const isChamber = nA < chamberThreshold && nMask > -0.2;
+            
+            const isCave = (spaghetti < caveThreshold && nMask > -0.4) || isChamber;
+
+            if (isCave) {
+                // Surface Entrance Check: allow caves to poke through the surface
+                const isBuried = y < sy - 1; 
+                // We carve if we are buried OR if it's a strong cave opening near the surface
+                if (isBuried || (isCave && y <= sy)) {
+                    // Left as air, making the cave completely dry
+                    continue; // Cave carved, don't place terrain
+                }
             }
 
             let type: BlockType;
             if (y === sy) {
-                if (temperature < -0.4 || sy > this.height * 0.75) type = BlockType.Snow;
+                if (temperature < -0.4 || sy > globalHeight * 0.75) type = BlockType.Snow;
                 else if (temperature > 0.4 || sy <= seaLevel + 1) type = BlockType.Sand;
                 else type = BlockType.Grass;
             } else if (y >= sy - 2) {
-                if (temperature < -0.4 || sy > this.height * 0.75) type = BlockType.Snow;
+                if (temperature < -0.4 || sy > globalHeight * 0.75) type = BlockType.Snow;
                 else if (temperature > 0.4 || sy <= seaLevel + 1) type = BlockType.Sand;
                 else type = BlockType.Dirt;
             } else {
@@ -190,7 +206,9 @@ export default class ChunkData {
         const treeSeed = this.octaveBaseNoise(tx + 777, tz + 888, 1.0, 1);
         if (treeSeed > 0.45) {
           const tVal = this.octaveBaseNoise(tx, tz, 4.0, 4) * 0.8;
-          const baseSY = Math.floor(this.height * (0.3 + 0.5 * tVal));
+          const globalHeight = 128;
+          const seaLevel = Math.floor(globalHeight * 0.25);
+          const baseSY = Math.floor(globalHeight * (0.3 + 0.5 * tVal));
           const tempAtBase = this.getTemperatureAt(tx, tz);
 
           // Tree existence conditions
@@ -221,10 +239,10 @@ export default class ChunkData {
             for (let x = workStartX; x < workEndX; x++) {
               for (let z = workStartZ; z < workEndZ; z++) {
                 // Determine vertical range for trunk + canopy
-                const minY = Math.max(1, baseSY);
-                const maxY = Math.min(this.height - 1, Math.round(cy + 8));
+                const localMinY = Math.max(this.startY, baseSY);
+                const localMaxY = Math.min(this.endY - 1, Math.round(cy + 8));
 
-                for (let y = minY; y <= maxY; y++) {
+                for (let y = localMinY; y <= localMaxY; y++) {
                   // 1. Organic Trunk & Root Check
                   if (y > baseSY && y <= cy) {
                     const progress = (y - baseSY) / trunkH;
@@ -272,15 +290,15 @@ export default class ChunkData {
   }
 
   private generateCavern(): void {
+    const globalHeight = 128;
     for (let x = this.startX; x < this.endX; x++) {
       for (let z = this.startZ; z < this.endZ; z++) {
-        for (let y = 0; y < this.height; y++) {
+        for (let y = this.startY; y < this.endY; y++) {
           const noise = this.simplex.noise3d(x / 16, y / 16, z / 16);
-          const density = noise + (0.5 - y / this.height);
+          const density = noise + (0.5 - y / globalHeight);
           
           if (density > 0.1) {
             let type = BlockType.Stone;
-            if (y < 5) type = BlockType.Water;
             if (noise > 0.7) type = BlockType.Coal;
             this.setBlock(x, y, z, type);
           }
@@ -292,11 +310,12 @@ export default class ChunkData {
   private generateLunar(): void {
     const surfaceOf = new Map<number, number>();
     const colIdx = (x: number, z: number) => x * 100_000 + z;
+    const globalHeight = 128;
 
     for (let x = this.startX; x < this.endX; x++) {
       for (let z = this.startZ; z < this.endZ; z++) {
         const noise = this.octaveBaseNoise(x, z, 2.0, 3);
-        let sy = Math.floor(this.height * (0.1 + 0.2 * noise));
+        let sy = Math.floor(globalHeight * (0.1 + 0.2 * noise));
         
         // Simple crater logic
         const cx = Math.floor(x / 50) * 50 + 25;
@@ -307,10 +326,11 @@ export default class ChunkData {
             sy -= Math.floor(craterDepth);
         }
 
-        sy = Math.max(2, Math.min(sy, this.height));
+        sy = Math.max(2, Math.min(sy, globalHeight));
         surfaceOf.set(colIdx(x, z), sy);
 
-        for (let y = 0; y <= sy; y++) {
+        const maxY = Math.min(sy, this.endY - 1);
+        for (let y = this.startY; y <= maxY; y++) {
           let type = BlockType.Stone;
           if (y === sy && noise > 0.5) type = BlockType.Snow; // Grayish dust/snow/sand
           this.setBlock(x, y, z, type);
@@ -320,12 +340,13 @@ export default class ChunkData {
   }
 
   private generateMercury(): void {
+    const globalHeight = 128;
     for (let x = this.startX; x < this.endX; x++) {
       for (let z = this.startZ; z < this.endZ; z++) {
         // Base terrain noise - Very rugged
         const baseNoise = this.octaveBaseNoise(x, z, 3.0, 5);
         const detailNoise = this.octaveBaseNoise(x + 500, z + 500, 0.5, 3);
-        let surfaceY = Math.floor(this.height * (0.2 + 0.4 * (baseNoise * 0.7 + detailNoise * 0.3)));
+        let surfaceY = Math.floor(globalHeight * (0.2 + 0.4 * (baseNoise * 0.7 + detailNoise * 0.3)));
 
         // Large craters
         const craterFreq = 64;
@@ -338,9 +359,10 @@ export default class ChunkData {
            surfaceY -= Math.floor(depth);
         }
 
-        surfaceY = Math.max(1, Math.min(surfaceY, this.height - 1));
+        surfaceY = Math.max(1, Math.min(surfaceY, globalHeight - 1));
 
-        for (let y = 0; y < this.height; y++) {
+        const maxY = Math.min(surfaceY, this.endY - 1);
+        for (let y = this.startY; y <= maxY; y++) {
           if (y <= surfaceY) {
             let type = BlockType.Stone;
             if (y === surfaceY) {
@@ -382,6 +404,8 @@ export default class ChunkData {
     return {
       startX: this.startX,
       endX:   this.endX,
+      startY: this.startY,
+      endY:   this.endY,
       startZ: this.startZ,
       endZ:   this.endZ,
       blocks: this.blocks,

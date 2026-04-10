@@ -6,17 +6,11 @@ import {
   BufferAttribute, 
   ShaderMaterial, 
   PerspectiveCamera, 
-  BoxGeometry, 
-  EdgesGeometry, 
-  LineSegments,
-  LineBasicMaterial,
   WebGLRenderer,
   Scene,
   Color
 } from 'three';
 import { SimplexNoise } from 'three/examples/jsm/Addons.js';
-import ChunkData from '../Chunk/ChunkData';
-import ChunkGeometry from '../Chunk/ChunkGeometry';
 import WorkerPool from './WorkerPool';
 import Sky from '../Sky';
 import { 
@@ -29,6 +23,12 @@ import {
   ChunkBorders 
 } from '../../types';
 import RNG from '../../utils/rng';
+import { EntityManager } from '../Entities/EntityManager';
+import { Animal } from '../Entities/Animal';
+import { Sheep } from '../Entities/Sheep';
+import { Cow } from '../Entities/Cow';
+import { Pig } from '../Entities/Pig';
+import { Chicken } from '../Entities/Chicken';
 
 interface LoadedChunk {
   /** Block data kept in memory so destroyed blocks can be applied and the mesh rebuilt. */
@@ -44,21 +44,22 @@ export default class ProceduralWorld extends Group {
   private readonly chunkSize: number;
   private chunkHeight: number;
   private renderDistance: number;
+  private verticalRenderDistance: number;
   private readonly camera: PerspectiveCamera;
   private readonly simplex: SimplexNoise;
   private readonly pool: WorkerPool;
   private readonly rebuildPool: WorkerPool;
 
   // ─── Chunk state ──────────────────────────────────────────────────────────
-  private readonly loadedChunks      = new Map<number, LoadedChunk>();
-  private readonly pendingChunks     = new Set<number>();
+  private readonly loadedChunks      = new Map<string, LoadedChunk>();
+  private readonly pendingChunks     = new Set<string>();
 
   // ─── Queues ───────────────────────────────────────────────────────────────
   private readonly meshQueue: WorkerResponse[] = [];
   private readonly rebuildMeshQueue: WorkerResponse[] = [];
-  private readonly rebuildQueue: number[] = [];
-  private readonly rebuildSet           = new Set<number>();
-  private readonly pendingRebuildChunks = new Set<number>();
+  private readonly rebuildQueue: string[] = [];
+  private readonly rebuildSet           = new Set<string>();
+  private readonly pendingRebuildChunks = new Set<string>();
 
   private readonly opaqueMaterial: ShaderMaterial;
   private readonly waterMaterial: ShaderMaterial;
@@ -67,13 +68,16 @@ export default class ProceduralWorld extends Group {
 
   // Hot Cache for collision optimization
   private lastChunk: LoadedChunk | null = null;
-  private lastChunkKey: number | null   = null;
+  private lastChunkKey: string | null   = null;
 
   private lastPlayerChunkX = Infinity;
+  private lastPlayerChunkY = Infinity;
   private lastPlayerChunkZ = Infinity;
   private lastUpdatePos    = new Vector3();
   private elapsedTime      = 0;
   public isUnderwater     = false;
+  private isTimePaused    = false;
+  private readonly entityManager: EntityManager;
 
   readonly params: WorldParams = {
     seed: Math.floor(Math.random() * 100_000),
@@ -91,18 +95,21 @@ export default class ProceduralWorld extends Group {
     super();
 
     this.chunkSize      = config.chunkSize;
-    this.chunkHeight    = config.chunkHeight;
+    this.chunkHeight    = config.chunkHeight; // Kept for backwards compatibility but not used for mesh height
     this.renderDistance = config.renderDistance;
+    this.verticalRenderDistance = config.verticalRenderDistance;
     this.camera         = config.camera;
 
     const rng = new RNG(this.params.seed);
     this.simplex = new SimplexNoise(rng);
 
-    const cores          = navigator.hardwareConcurrency;
-    const mainWorkers    = Math.max(1, Math.floor(cores * 0.75));
-    const rebuildWorkers = Math.max(1, cores - mainWorkers);
-    this.pool        = new WorkerPool(mainWorkers);
-    this.rebuildPool = new WorkerPool(rebuildWorkers);
+    const cores = navigator.hardwareConcurrency || 4;
+    const workerCount = Math.max(2, cores - 1);
+    this.pool = new WorkerPool(workerCount);
+    // Reuse the same pool for rebuilds to allow 100% core utilization for the intensive meshing step
+    this.rebuildPool = this.pool;
+    
+    this.entityManager = new EntityManager(this);
 
     this.opaqueMaterial = new ShaderMaterial({
       uniforms: {
@@ -123,7 +130,6 @@ export default class ProceduralWorld extends Group {
         varying float vCreationTime;
         varying float vAo;
         uniform float uTime;
-
         void main() {
           vNormal = normal;
           vColor = color;
@@ -133,10 +139,12 @@ export default class ProceduralWorld extends Group {
           vAo = ao;
 
           vec3 pos = position;
-          float age = uTime - creationTime;
-          float rise = smoothstep(0.0, 1.5, age);
-          pos.y *= rise;
-          pos.y -= (1.0 - rise) * 20.0;
+          if (pos.y >= 0.0) {
+              float age = uTime - creationTime;
+              float rise = smoothstep(0.0, 1.5, age);
+              pos.y *= rise;
+              pos.y -= (1.0 - rise) * 20.0;
+          }
 
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
@@ -197,10 +205,19 @@ export default class ProceduralWorld extends Group {
           vAo = ao;
           
           vec3 pos = position;
-          pos.y += sin(uTime * 2.0 + position.x * 0.5) * 0.1;
-          pos.y += cos(uTime * 1.5 + position.z * 0.5) * 0.1;
-          
           vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+          
+          // Use world coordinates so waves align across chunk borders
+          pos.y += sin(uTime * 2.0 + vWorldPos.x * 0.5) * 0.1;
+          pos.y += cos(uTime * 1.5 + vWorldPos.z * 0.5) * 0.1;
+
+          if (position.y >= 0.0) {
+              float age = uTime - creationTime;
+              float rise = smoothstep(0.0, 1.5, age);
+              pos.y *= rise;
+              pos.y -= (1.0 - rise) * 20.0;
+          }
+          
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
       `,
@@ -278,7 +295,13 @@ export default class ProceduralWorld extends Group {
   }
 
   public setTime(phase: string): void {
-    this.sky.setTime(phase);
+    if (phase === 'stop') {
+        this.isTimePaused = true;
+    } else if (phase === 'start') {
+        this.isTimePaused = false;
+    } else {
+        this.sky.setTime(phase);
+    }
   }
 
   public locateBiome(name: string): { x: number; z: number } | null {
@@ -320,6 +343,7 @@ export default class ProceduralWorld extends Group {
     this.lastChunk = null;
     this.lastChunkKey = null;
     this.lastPlayerChunkX = Infinity;
+    this.lastPlayerChunkY = Infinity;
     this.lastPlayerChunkZ = Infinity;
     this.elapsedTime      = 0;
     this.sky.setWorldType(this.params.worldType);
@@ -352,8 +376,12 @@ export default class ProceduralWorld extends Group {
         }
     });
 
-    this.sky.tick(this.camera);
-    this.elapsedTime += 0.016; // Stable, monotonic clock (60 FPS assumed for animations)
+    if (!this.isTimePaused) {
+        this.sky.tick(this.camera);
+        this.elapsedTime += 0.016; // Stable, monotonic clock (60 FPS assumed for animations)
+        // 3. Update Entities
+        this.entityManager.update(16); // ~60fps assumption for now
+    }
 
     if (this.camera.position.distanceToSquared(this.lastUpdatePos) > 16) {
         this.updateChunks(false);
@@ -364,7 +392,7 @@ export default class ProceduralWorld extends Group {
     const tickStart = performance.now();
     const timeLimit = 8.0;
 
-    // 1. Prioritize rebuilds
+    // 1. Process chunk meshes (from async rebuilds)
     while (this.rebuildMeshQueue.length > 0 && (performance.now() - tickStart) < timeLimit) {
       const nextRebuild = this.rebuildMeshQueue.shift();
       if (nextRebuild && this.loadedChunks.has(nextRebuild.chunkKey)) {
@@ -372,23 +400,22 @@ export default class ProceduralWorld extends Group {
       }
     }
 
-    // 2. Process new chunks
-    while (this.meshQueue.length > 0 && (performance.now() - tickStart) < timeLimit) {
-      const next = this.meshQueue.shift();
-      if (next) {
-        // Slightly more relaxed range check for mesh queue to avoid flickers
-        if (this.isDesiredNumeric(next.chunkKey, 1.5)) {
-          this.applyChunkData(next, this.elapsedTime);
-          this.queueNeighbourRebuilds(next.chunkKey);
+    // 2. Dispatch meshing rebuilds
+    const itemsInQueue = this.rebuildQueue.length;
+    let itemsProcessed = 0;
+    while (itemsProcessed < itemsInQueue && (performance.now() - tickStart) < timeLimit) {
+      const toRebuild = this.rebuildQueue.shift();
+      if (toRebuild !== undefined) {
+        if (this.pendingRebuildChunks.has(toRebuild)) {
+          // Chunk is currently rebuilding, push to back to try again later
+          this.rebuildQueue.push(toRebuild);
+        } else {
+          this.rebuildSet.delete(toRebuild);
+          const chunk = this.loadedChunks.get(toRebuild);
+          if (chunk) this.asyncRebuild(toRebuild, chunk);
         }
       }
-    }
-
-    const toRebuild = this.rebuildQueue.shift();
-    if (toRebuild !== undefined) {
-      this.rebuildSet.delete(toRebuild);
-      const chunk = this.loadedChunks.get(toRebuild);
-      if (chunk) this.asyncRebuild(toRebuild, chunk);
+      itemsProcessed++;
     }
   }
 
@@ -410,14 +437,58 @@ export default class ProceduralWorld extends Group {
         this.destroyChunkMeshes(chunk);
     }
 
-    if (response.opaque.positions.length > 3) {
+    if (response.opaque && response.opaque.positions.length > 3) {
         chunk.opaqueMesh = this.buildSingleMesh(response.opaque, uTime, this.opaqueMaterial);
         this.add(chunk.opaqueMesh);
     }
-    if (response.water.positions.length > 3) {
+    if (response.water && response.water.positions.length > 3) {
         chunk.waterMesh = this.buildSingleMesh(response.water, uTime, this.waterMaterial);
         this.add(chunk.waterMesh);
     }
+
+    // Try to spawn an animal if this is a newly loaded surface chunk
+    if (!response.chunkKey.includes('rebuild')) { // Simple check for first-time load
+        this.trySpawnAnimal(response.chunkKey);
+    }
+  }
+
+  private trySpawnAnimal(key: string): void {
+      const [sx, sy, sz] = this.decodeKey(key);
+      // Only spawn in surface layers (Y=0 to Y=128)
+      if (sy < 0 || sy > 128) return;
+      if (Math.random() > 0.05) return; // 5% chance per chunk
+
+      const chunk = this.loadedChunks.get(key);
+      if (!chunk) return;
+
+      // Find a suitable surface block (looking from top down)
+      for (let lx = 4; lx < this.chunkSize - 4; lx += 4) {
+          for (let lz = 4; lz < this.chunkSize - 4; lz += 4) {
+              for (let ly = this.chunkSize - 1; ly >= 0; ly--) {
+                  const idx = ly * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
+                  const block = chunk.data.blocks[idx];
+                  
+                  if (block !== -1 && block !== 5 && block !== 6) { // solid ground
+                    const rand = Math.random();
+                    let entity: Animal;
+                    
+                    if (rand < 0.25) {
+                        entity = new Sheep(this);
+                    } else if (rand < 0.50) {
+                        entity = new Cow(this);
+                    } else if (rand < 0.75) {
+                        entity = new Pig(this);
+                    } else {
+                        entity = new Chicken(this);
+                    }
+                    
+                    entity.position.set(sx + lx + 0.5, sy + ly + 1.1, sz + lz + 0.5);
+                    this.entityManager.add(entity);
+                    return; // one animal per chunk max
+                  }
+              }
+          }
+      }
   }
 
   private buildSingleMesh(data: GeometryData, creationTime: number, material: ShaderMaterial): Mesh {
@@ -461,29 +532,31 @@ export default class ProceduralWorld extends Group {
     const bx = Math.floor(point.x - normal.x * 0.001);
     const by = Math.floor(point.y - normal.y * 0.001);
     const bz = Math.floor(point.z - normal.z * 0.001);
-    const key = this.keyForBlock(bx, bz);
+    const key = this.keyForBlock(bx, by, bz);
     const chunk = this.loadedChunks.get(key);
-    if (!chunk || by < 0 || by >= this.chunkHeight) return;
+    if (!chunk) return;
     
     const lx = bx - chunk.data.startX;
+    const ly = by - chunk.data.startY;
     const lz = bz - chunk.data.startZ;
-    const idx = by * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
+    const idx = ly * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
     
     chunk.data.blocks[idx] = -1;
     this.asyncRebuild(key, chunk);
-    this.rebuildAdjacentChunks(bx, bz, chunk.data);
+    this.rebuildAdjacentChunks(bx, by, bz, chunk.data);
   }
 
   getBlock(bx: number, by: number, bz: number): number {
-    const key = this.keyForBlock(bx, bz);
+    const key = this.keyForBlock(bx, by, bz);
     let chunk: LoadedChunk | undefined;
     if (key === this.lastChunkKey && this.lastChunk) { chunk = this.lastChunk; }
     else { chunk = this.loadedChunks.get(key); if (chunk) { this.lastChunk = chunk; this.lastChunkKey = key; } }
     
-    if (!chunk || by < 0 || by >= this.chunkHeight) return -1;
+    if (!chunk) return -1;
     const lx = bx - chunk.data.startX;
+    const ly = by - chunk.data.startY;
     const lz = bz - chunk.data.startZ;
-    const idx = by * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
+    const idx = ly * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
     return chunk.data.blocks[idx];
   }
   isBlockSolid(bx: number, by: number, bz: number): boolean { 
@@ -493,39 +566,59 @@ export default class ProceduralWorld extends Group {
 
   private updateChunks(force: boolean): void {
     const cx = Math.floor(this.camera.position.x / this.chunkSize);
+    const cy = Math.floor(this.camera.position.y / this.chunkSize);
     const cz = Math.floor(this.camera.position.z / this.chunkSize);
-    if (!force && cx === this.lastPlayerChunkX && cz === this.lastPlayerChunkZ) return;
-    this.lastPlayerChunkX = cx; this.lastPlayerChunkZ = cz;
-    const desired = new Set<number>();
+    if (!force && cx === this.lastPlayerChunkX && cy === this.lastPlayerChunkY && cz === this.lastPlayerChunkZ) return;
+    this.lastPlayerChunkX = cx; this.lastPlayerChunkY = cy; this.lastPlayerChunkZ = cz;
+    
+    const desired = new Set<string>();
     const radiusSq = this.renderDistance * this.renderDistance;
+    
     for (let dx = -this.renderDistance; dx <= this.renderDistance; dx++) {
       for (let dz = -this.renderDistance; dz <= this.renderDistance; dz++) {
         if (dx * dx + dz * dz > radiusSq) continue;
-        desired.add(this.chunkKey((cx + dx) * this.chunkSize, (cz + dz) * this.chunkSize));
+        
+        // A) Deep Dynamic Layer (Dynamic Vertical Load from player point)
+        for (let dy = -this.verticalRenderDistance; dy <= this.verticalRenderDistance; dy++) {
+          desired.add(this.chunkKey((cx + dx) * this.chunkSize, (cy + dy) * this.chunkSize, (cz + dz) * this.chunkSize));
+        }
+        
+        // B) Surface Pinning Layer (Permanent view of terrain up to max depth)
+        // 4 chunks from Y=0 to Y=128
+        for (let baseCy = 0; baseCy <= 3; baseCy++) {
+          desired.add(this.chunkKey((cx + dx) * this.chunkSize, baseCy * this.chunkSize, (cz + dz) * this.chunkSize));
+        }
       }
     }
-    const toUnload: number[] = [];
+    
+    const toUnload: string[] = [];
     for (const key of this.loadedChunks.keys()) {
       if (!desired.has(key)) toUnload.push(key);
     }
     for (const key of toUnload) this.unloadChunk(key);
+    
     for (const key of Array.from(this.pendingChunks)) {
       if (!desired.has(key)) { this.pool.cancel(key); this.pendingChunks.delete(key); }
     }
+    
     const toRequest = Array.from(desired)
       .filter(k => !this.loadedChunks.has(k) && !this.pendingChunks.has(k))
-      .sort((a, b) => this.keyDistanceNumeric(a, cx, cz) - this.keyDistanceNumeric(b, cx, cz));
+      .sort((a, b) => this.keyDistanceNumeric(a, cx, cy, cz) - this.keyDistanceNumeric(b, cx, cy, cz));
+      
     toRequest.forEach(k => this.requestChunk(k));
   }
 
-  private requestChunk(key: number): void {
+  private requestChunk(key: string): void {
     this.pendingChunks.add(key);
-    const [startX, startZ] = this.decodeKey(key);
+    const [startX, startY, startZ] = this.decodeKey(key);
     this.pool.dispatch(
       {
-        chunkKey: key, size: this.chunkSize, height: this.chunkHeight,
-        startX, endX: startX + this.chunkSize, startZ, endZ: startZ + this.chunkSize,
-        worldParams: this.params, neighbourBorderBlocks: this.getNeighbourBorderBlocks(startX, startZ),
+        chunkKey: key, size: this.chunkSize, height: this.chunkSize,
+        startX, endX: startX + this.chunkSize, 
+        startY, endY: startY + this.chunkSize, 
+        startZ, endZ: startZ + this.chunkSize,
+        worldParams: this.params, neighbourBorderBlocks: this.getNeighbourBorderBlocks(startX, startY, startZ),
+        buildMesh: false // We only want terrain data first!
       },
       (response) => this.onChunkReady(response),
     );
@@ -533,8 +626,6 @@ export default class ProceduralWorld extends Group {
 
   private onChunkReady(response: WorkerResponse): void {
     this.pendingChunks.delete(response.chunkKey);
-    // Add to loadedChunks immediately to prevent updateChunks from requesting it again
-    // while it awaits mesh creation in the meshQueue.
     if (!this.loadedChunks.has(response.chunkKey)) {
         this.loadedChunks.set(response.chunkKey, {
             data: response.chunkData,
@@ -543,10 +634,24 @@ export default class ProceduralWorld extends Group {
             waterMesh: null
         });
     }
-    if (this.isDesiredNumeric(response.chunkKey)) this.meshQueue.push(response);
+    
+    // Attempt to mesh this chunk and its existing neighbors.
+    this.checkAndQueueMeshing(response.chunkKey);
+    const [sx, sy, sz] = this.decodeKey(response.chunkKey);
+    const endX = sx + this.chunkSize;
+    const endY = sy + this.chunkSize;
+    const endZ = sz + this.chunkSize;
+    
+    for (const k of [
+      this.chunkKey(sx - this.chunkSize, sy, sz), this.chunkKey(endX, sy, sz),
+      this.chunkKey(sx, sy - this.chunkSize, sz), this.chunkKey(sx, endY, sz),
+      this.chunkKey(sx, sy, sz - this.chunkSize), this.chunkKey(sx, sy, endZ),
+    ]) {
+        this.checkAndQueueMeshing(k);
+    }
   }
 
-  private unloadChunk(key: number): void {
+  private unloadChunk(key: string): void {
     const chunk = this.loadedChunks.get(key);
     if (chunk) {
         this.destroyChunkMeshes(chunk);
@@ -555,16 +660,19 @@ export default class ProceduralWorld extends Group {
     if (this.lastChunkKey === key) { this.lastChunk = null; this.lastChunkKey = null; }
   }
 
-  private asyncRebuild(key: number, chunk: LoadedChunk): void {
+  private asyncRebuild(key: string, chunk: LoadedChunk): void {
     if (this.pendingRebuildChunks.has(key)) return;
     this.pendingRebuildChunks.add(key);
-    const [sx, sz] = this.decodeKey(key);
+    const [sx, sy, sz] = this.decodeKey(key);
     this.rebuildPool.dispatch(
       {
-        chunkKey: key, size: this.chunkSize, height: this.chunkHeight,
-        startX: sx, endX: sx + this.chunkSize, startZ: sz, endZ: sz + this.chunkSize,
-        worldParams: this.params, neighbourBorderBlocks: this.getNeighbourBorderBlocks(sx, sz),
+        chunkKey: key, size: this.chunkSize, height: this.chunkSize,
+        startX: sx, endX: sx + this.chunkSize, 
+        startY: sy, endY: sy + this.chunkSize, 
+        startZ: sz, endZ: sz + this.chunkSize,
+        worldParams: this.params, neighbourBorderBlocks: this.getNeighbourBorderBlocks(sx, sy, sz),
         existingBlocks: chunk.data.blocks,
+        buildMesh: true // Rebuild jobs explicitly request the mesh
       },
       (response) => this.onRebuildReady(response),
     );
@@ -577,53 +685,77 @@ export default class ProceduralWorld extends Group {
     }
   }
 
-  private rebuildAdjacentChunks(bx: number, bz: number, data: ChunkDataResult): void {
-    const offsets: Array<[number, number]> = [];
-    if (bx === data.startX) offsets.push([-this.chunkSize, 0]);
-    if (bx === data.endX - 1) offsets.push([this.chunkSize, 0]);
-    if (bz === data.startZ) offsets.push([0, -this.chunkSize]);
-    if (bz === data.endZ - 1) offsets.push([0, this.chunkSize]);
-    for (const [dx, dz] of offsets) {
-      const adjKey = this.keyForBlock(bx + dx, bz + dz);
+  private rebuildAdjacentChunks(bx: number, by: number, bz: number, data: ChunkDataResult): void {
+    const offsets: Array<[number, number, number]> = [];
+    if (bx === data.startX) offsets.push([-this.chunkSize, 0, 0]);
+    if (bx === data.endX - 1) offsets.push([this.chunkSize, 0, 0]);
+    if (by === data.startY) offsets.push([0, -this.chunkSize, 0]);
+    if (by === data.endY - 1) offsets.push([0, this.chunkSize, 0]);
+    if (bz === data.startZ) offsets.push([0, 0, -this.chunkSize]);
+    if (bz === data.endZ - 1) offsets.push([0, 0, this.chunkSize]);
+    for (const [dx, dy, dz] of offsets) {
+      const adjKey = this.keyForBlock(bx + dx, by + dy, bz + dz);
       const adjChunk = this.loadedChunks.get(adjKey);
       if (adjChunk) this.asyncRebuild(adjKey, adjChunk);
     }
   }
 
-  private getNeighbourBorderBlocks(startX: number, startZ: number): ChunkBorders {
+  private getNeighbourBorderBlocks(startX: number, startY: number, startZ: number): ChunkBorders {
     const endX = startX + this.chunkSize;
+    const endY = startY + this.chunkSize;
     const endZ = startZ + this.chunkSize;
     
-    const nxKey = this.chunkKey(startX - this.chunkSize, startZ);
-    const pxKey = this.chunkKey(endX, startZ);
-    const nzKey = this.chunkKey(startX, startZ - this.chunkSize);
-    const pzKey = this.chunkKey(startX, endZ);
+    const nxKey = this.chunkKey(startX - this.chunkSize, startY, startZ);
+    const pxKey = this.chunkKey(endX, startY, startZ);
+    const nyKey = this.chunkKey(startX, startY - this.chunkSize, startZ);
+    const pyKey = this.chunkKey(startX, endY, startZ);
+    const nzKey = this.chunkKey(startX, startY, startZ - this.chunkSize);
+    const pzKey = this.chunkKey(startX, startY, endZ);
     
     const nx = this.loadedChunks.get(nxKey);
     const px = this.loadedChunks.get(pxKey);
+    const ny = this.loadedChunks.get(nyKey);
+    const py = this.loadedChunks.get(pyKey);
     const nz = this.loadedChunks.get(nzKey);
     const pz = this.loadedChunks.get(pzKey);
     
     return {
       negX: nx?.borders.posX,
       posX: px?.borders.negX,
+      negY: ny?.borders.posY,
+      posY: py?.borders.negY,
       negZ: nz?.borders.posZ,
       posZ: pz?.borders.negZ
     };
   }
 
-  private queueNeighbourRebuilds(chunkKey: number): void {
-    const [sx, sz] = this.decodeKey(chunkKey);
-    const endX = sx + this.chunkSize;
-    const endZ = sz + this.chunkSize;
-    for (const k of [
-      this.chunkKey(sx - this.chunkSize, sz), this.chunkKey(endX, sz),
-      this.chunkKey(sx, sz - this.chunkSize), this.chunkKey(sx, endZ),
-    ]) {
-      if (this.loadedChunks.has(k) && !this.rebuildSet.has(k)) {
-        this.rebuildSet.add(k); this.rebuildQueue.push(k);
+  private checkAndQueueMeshing(chunkKey: string): void {
+    const chunk = this.loadedChunks.get(chunkKey);
+    if (!chunk || this.rebuildSet.has(chunkKey)) return; // Already queued
+    
+    // If it hasn't been meshed for the first time yet, wait for anticipated neighbors to avoid double-draws
+    if (!chunk.opaqueMesh) {
+      const [sx, sy, sz] = this.decodeKey(chunkKey);
+      const endX = sx + this.chunkSize;
+      const endY = sy + this.chunkSize;
+      const endZ = sz + this.chunkSize;
+      
+      // Check if any expected neighbor is missing
+      for (const nk of [
+        this.chunkKey(sx - this.chunkSize, sy, sz), this.chunkKey(endX, sy, sz),
+        this.chunkKey(sx, sy - this.chunkSize, sz), this.chunkKey(sx, endY, sz),
+        this.chunkKey(sx, sy, sz - this.chunkSize), this.chunkKey(sx, sy, endZ),
+      ]) {
+        // If the neighbor is within our desired boundaries but hasn't loaded its terrain data yet, we wait.
+        if (this.isDesiredNumeric(nk) && !this.loadedChunks.has(nk)) {
+          return; 
+        }
       }
     }
+    
+    // Either all anticipated neighbors are fully generated! Or the chunk already has a mesh and needs to update borders!
+    this.rebuildSet.add(chunkKey);
+    this.rebuildQueue.push(chunkKey);
   }
 
   private getTemperatureAt(x: number, z: number): number {
@@ -637,36 +769,48 @@ export default class ProceduralWorld extends Group {
     return value / maxValue;
   }
 
-  private chunkKey(startX: number, startZ: number): number {
-    const kx = (startX / this.chunkSize) + 32768;
-    const kz = (startZ / this.chunkSize) + 32768;
-    return (kx * 65536) + kz;
+  private chunkKey(startX: number, startY: number, startZ: number): string {
+    return `${startX}_${startY}_${startZ}`;
   }
 
-  private decodeKey(key: number): [number, number] {
-    const kx = Math.floor(key / 65536) - 32768;
-    const kz = (key % 65536) - 32768;
-    return [kx * this.chunkSize, kz * this.chunkSize];
+  private decodeKey(key: string): [number, number, number] {
+    const parts = key.split('_');
+    return [parseInt(parts[0], 10), parseInt(parts[1], 10), parseInt(parts[2], 10)];
   }
 
-
-  private keyForBlock(bx: number, bz: number): number {
-    return this.chunkKey(Math.floor(bx / this.chunkSize) * this.chunkSize, Math.floor(bz / this.chunkSize) * this.chunkSize);
+  private keyForBlock(bx: number, by: number, bz: number): string {
+    return this.chunkKey(
+      Math.floor(bx / this.chunkSize) * this.chunkSize, 
+      Math.floor(by / this.chunkSize) * this.chunkSize, 
+      Math.floor(bz / this.chunkSize) * this.chunkSize
+    );
   }
 
-  private keyDistanceNumeric(key: number, cx: number, cz: number): number {
-    const [startX, startZ] = this.decodeKey(key);
+  private keyDistanceNumeric(key: string, cx: number, cy: number, cz: number): number {
+    const [startX, startY, startZ] = this.decodeKey(key);
     const kx = Math.floor(startX / this.chunkSize);
+    const ky = Math.floor(startY / this.chunkSize);
     const kz = Math.floor(startZ / this.chunkSize);
-    return (kx - cx) ** 2 + (kz - cz) ** 2;
+    return (kx - cx) ** 2 + (ky - cy) ** 2 + (kz - cz) ** 2;
   }
 
-  private isDesiredNumeric(key: number, margin = 1.0): boolean {
-    const [startX, startZ] = this.decodeKey(key);
+  private isDesiredNumeric(key: string, margin = 1.0): boolean {
+    const [startX, startY, startZ] = this.decodeKey(key);
     const kx = Math.floor(startX / this.chunkSize);
+    const ky = Math.floor(startY / this.chunkSize);
     const kz = Math.floor(startZ / this.chunkSize);
+    
     const dx = kx - this.lastPlayerChunkX;
+    const dy = ky - this.lastPlayerChunkY;
     const dz = kz - this.lastPlayerChunkZ;
-    return dx * dx + dz * dz <= (this.renderDistance * margin) ** 2;
+    
+    // Outside horizontal bounds
+    if (dx * dx + dz * dz > (this.renderDistance * margin) ** 2) return false;
+    
+    // Check our two rules: Surface Pinning or Spherical Distance
+    const isSurfacePined = ky >= 0 && ky <= 3;
+    const isSphericalPined = Math.abs(dy) <= (this.verticalRenderDistance * margin);
+    
+    return isSurfacePined || isSphericalPined;
   }
 }

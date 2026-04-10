@@ -66,11 +66,13 @@ export interface WorldParams {
 }
 
 export interface ChunkJobData {
-  chunkKey: number;
+  chunkKey: string;
   size: number;
   height: number;
   startX: number;
   endX: number;
+  startY: number;
+  endY: number;
   startZ: number;
   endZ: number;
   worldParams: WorldParams;
@@ -78,6 +80,8 @@ export interface ChunkJobData {
   neighbourBorderBlocks: ChunkBorders;
   /** If provided, skip terrain generation and use these blocks directly (async rebuild). */
   existingBlocks?: Int8Array;
+  /** Whether to construct and return 3D geometry. */
+  buildMesh?: boolean;
 }
 
 /** Typed arrays so buffers can be transferred (zero-copy) from worker → main thread. */
@@ -95,6 +99,8 @@ export interface GeometryData {
 export interface ChunkDataResult {
   startX: number;
   endX: number;
+  startY: number;
+  endY: number;
   startZ: number;
   endZ: number;
   blocks: Int8Array;
@@ -106,6 +112,10 @@ export interface ChunkBorders {
   negX?: Int8Array;
   /** Blocks at x === endX - 1 (exposed toward the +X neighbour). */
   posX?: Int8Array;
+  /** Blocks at y === startY (exposed toward the -Y neighbour). */
+  negY?: Int8Array;
+  /** Blocks at y === endY - 1 (exposed toward the +Y neighbour). */
+  posY?: Int8Array;
   /** Blocks at z === startZ (exposed toward the -Z neighbour). */
   negZ?: Int8Array;
   /** Blocks at z === endZ - 1 (exposed toward the +Z neighbour). */
@@ -113,15 +123,16 @@ export interface ChunkBorders {
 }
 
 export interface WorkerResponse {
-  chunkKey: number;
+  chunkKey: string;
   chunkData: ChunkDataResult;
   borders: ChunkBorders;
-  opaque: GeometryData;
-  water: GeometryData;
+  opaque?: GeometryData;
+  water?: GeometryData;
 }
 
 export interface WorldConfig {
   renderDistance: number;
+  verticalRenderDistance: number;
   chunkSize: number;
   chunkHeight: number;
 }
