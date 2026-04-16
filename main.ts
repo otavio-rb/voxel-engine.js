@@ -69,14 +69,25 @@ class Game {
 
     // Mouse Click (Raycast)
     document.addEventListener('mousedown', e => {
-      // Only trigger block interactions on left click (button 0)
-      if (e.button !== 0) return;
+      // Only trigger block interactions on left click (button 0) or right click (button 2)
+      if (e.button !== 0 && e.button !== 2) return;
 
       const isChatInputFocused = document.activeElement?.classList.contains('chat-input');
       if (!isChatInputFocused && !this.isLocked) {
         this.canvas.requestPointerLock();
       } else if (this.isLocked) {
-        this.worker.postMessage({ type: 'mousedown' });
+        this.worker.postMessage({ type: 'mousedown', payload: { button: e.button } });
+      }
+
+      // Prevent context menu on right click
+      if (e.button === 2) {
+        e.preventDefault();
+      }
+    });
+
+    document.addEventListener('contextmenu', e => {
+      if (this.isLocked) {
+        e.preventDefault();
       }
     });
 
@@ -120,6 +131,22 @@ class Game {
         if (overlay) {
             overlay.style.display = stats.isUnderwater ? 'block' : 'none';
         }
+      } else if (e.data.type === 'world_init') {
+          const type = e.data.config.type;
+          const menuEl = document.getElementById('world-menu')!;
+          menuEl.classList.add('hidden');
+          const resumeBtn = document.getElementById('btn-resume')!;
+          resumeBtn.style.display = 'block';
+          
+          this.isGenerating = true;
+          this.worker.postMessage({ type: 'command', payload: { command: '/start', args: [] } });
+          this.worker.postMessage({ type: 'command', payload: { command: '/regen', args: [type] } });
+          this.canvas.requestPointerLock();
+      } else if (e.data.type === 'world_regen') {
+          const type = e.data.config.type;
+          this.worker.postMessage({ type: 'command', payload: { command: '/regen', args: [type] } });
+      } else if (e.data.type === 'selection_change') {
+          this.ui.updateSelectedBlock(e.data.payload.type);
       }
     };
   }
