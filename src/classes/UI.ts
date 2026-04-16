@@ -23,6 +23,17 @@ export default class UI {
     this.resetChatTimeout();
   }
 
+  public updateSelectedBlock(type: number): void {
+    const slots = document.querySelectorAll('.hotbar-slot');
+    slots.forEach(slot => {
+      if (parseInt(slot.getAttribute('data-block') || '-2') === type) {
+        slot.classList.add('selected');
+      } else {
+        slot.classList.remove('selected');
+      }
+    });
+  }
+
   public get isChatOpen(): boolean {
     return this.inputEl.style.display === 'block';
   }

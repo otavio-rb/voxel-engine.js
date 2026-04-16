@@ -220,6 +220,52 @@
   pointer-events: none;
 }
 
+#hotbar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  border-radius: 8px;
+  pointer-events: auto;
+  z-index: 20;
+}
+
+.hotbar-slot {
+  width: 48px;
+  height: 48px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid transparent;
+  border-radius: 4px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  font-size: 0.8rem;
+  transition: all 0.2s ease;
+  overflow: hidden;
+  position: relative;
+}
+
+.hotbar-slot.selected {
+  border-color: #4CAF50;
+  background: rgba(76, 175, 80, 0.2);
+  transform: translateY(-4px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+.slot-label {
+  position: absolute;
+  bottom: 2px;
+  font-size: 0.6rem;
+  background: rgba(0, 0, 0, 0.5);
+  width: 100%;
+  text-align: center;
+}
+
 .chat-wrapper {
   position: absolute;
   bottom: 40px;
