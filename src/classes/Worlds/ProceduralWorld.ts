@@ -4,7 +4,12 @@ import {
   Mesh, 
   BufferGeometry, 
   BufferAttribute, 
-  ShaderMaterial, 
+  ShaderMaterial,
+  MeshBasicMaterial,
+  LineBasicMaterial,
+  LineSegments,
+  EdgesGeometry,
+  BoxGeometry,
   PerspectiveCamera, 
   WebGLRenderer,
   Scene,
@@ -14,6 +19,7 @@ import { SimplexNoise } from 'three/examples/jsm/Addons.js';
 import WorkerPool from './WorkerPool';
 import Sky from '../Sky';
 import { 
+  BlockType,
   WorldType, 
   WorldParams, 
   ChunkDataResult, 
@@ -77,6 +83,13 @@ export default class ProceduralWorld extends Group {
   private elapsedTime      = 0;
   public isUnderwater     = false;
   private isTimePaused    = false;
+  private isDebugMode     = true;  // player starts in debug, no occlusion culling
+  private occlusionTick   = 0;
+  private occlusionDirty  = false; // set to true whenever mode or chunks change
+  private readonly blockOutline:    Mesh;
+  private readonly blockOutlineMat: MeshBasicMaterial;
+  private readonly blockEdge:       LineSegments;   // black border edge lines
+  private readonly blockEdgeMat:    LineBasicMaterial;
   private readonly entityManager: EntityManager;
 
   readonly params: WorldParams = {
@@ -243,6 +256,43 @@ export default class ProceduralWorld extends Group {
 
     this.sky = new Sky();
     this.add(this.sky);
+
+    // ── Block outline: two-layer inset (shadow + main) ─────────────────────
+    //  Shadow layer  (0.992) — slightly larger, dark-gray, low opacity
+    //    creates the inset "pressed" shadow illusion
+    //  Main  layer   (0.968) — pure black, higher opacity, renders on top
+    //  Both use depthTest:false so they sit on top of the block faces.
+    // ── Block face highlight ────────────────────────────────────────────────
+    //  A semi-transparent dark face overlay rendered on top of the targeted block.
+    //  polygonOffset pushes it just in front of the chunk faces to avoid z-fighting.
+    this.blockOutlineMat = new MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.25,
+      depthTest: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -4,
+    });
+    this.blockOutline = new Mesh(new BoxGeometry(1, 1, 1), this.blockOutlineMat);
+    this.blockOutline.renderOrder = 1;
+    this.blockOutline.visible = false;
+    this.add(this.blockOutline);
+
+    // Black border edges rendered on top of the face highlight
+    this.blockEdgeMat = new LineBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+    });
+    this.blockEdge = new LineSegments(
+      new EdgesGeometry(new BoxGeometry(1.001, 1.001, 1.001)),
+      this.blockEdgeMat
+    );
+    this.blockEdge.renderOrder = 2;
+    this.blockEdge.visible = false;
+    this.add(this.blockEdge);
   }
 
   public setChunkHeight(height: number): void {
@@ -376,6 +426,42 @@ export default class ProceduralWorld extends Group {
         }
     });
 
+    // ── Block highlight animation ──────────────────────────────────────────────
+    if (this.blockOutline.visible) {
+      // Breaking state has higher base opacity
+      const isBreaking = this.blockOutlineMat.opacity >= 0.5; 
+      const speed = isBreaking ? 15.0 : 5.0;
+      const pulse = (Math.sin(this.elapsedTime * speed) + 1.0) * 0.5;
+      
+      if (isBreaking) {
+          // ... (position reset and jitter)
+          const bx = Math.floor(this.blockOutline.position.x);
+          const by = Math.floor(this.blockOutline.position.y);
+          const bz = Math.floor(this.blockOutline.position.z);
+          
+          this.blockOutline.position.set(bx + 0.5, by + 0.5, bz + 0.5);
+          this.blockEdge.position.set(bx + 0.5, by + 0.5, bz + 0.5);
+
+          const jitter = 0.02;
+          const jx = (Math.random() - 0.5) * jitter;
+          const jy = (Math.random() - 0.5) * jitter;
+          const jz = (Math.random() - 0.5) * jitter;
+
+          this.blockOutline.position.x += jx;
+          this.blockOutline.position.y += jy;
+          this.blockOutline.position.z += jz;
+          this.blockEdge.position.x += jx;
+          this.blockEdge.position.y += jy;
+          this.blockEdge.position.z += jz;
+
+          this.blockOutlineMat.opacity = 0.5 + 0.3 * pulse; // 0.5 to 0.8
+          this.blockEdgeMat.opacity    = 0.7 + 0.3 * pulse;
+      } else {
+          this.blockOutlineMat.opacity = 0.12 + 0.23 * pulse; // 0.12 to 0.35
+          this.blockEdgeMat.opacity    = 0.60 + 0.40 * pulse;
+      }
+    }
+
     if (!this.isTimePaused) {
         this.sky.tick(this.camera);
         this.elapsedTime += 0.016; // Stable, monotonic clock (60 FPS assumed for animations)
@@ -416,6 +502,14 @@ export default class ProceduralWorld extends Group {
         }
       }
       itemsProcessed++;
+    }
+
+    // 3. Neighbor-solidity occlusion culling (throttled — runs every 15 frames ~250ms @ 60fps)
+    this.occlusionTick++;
+    if (this.occlusionTick >= 15 || this.occlusionDirty) {
+      this.occlusionTick = 0;
+      this.occlusionDirty = false;
+      this.updateOcclusion();
     }
   }
 
@@ -497,13 +591,19 @@ export default class ProceduralWorld extends Group {
     geometry.setAttribute('normal',       new BufferAttribute(data.normals,   3));
     geometry.setAttribute('color',        new BufferAttribute(data.colors,    3));
     geometry.setAttribute('ao',           new BufferAttribute(data.ao,        1));
-    
-    // Reuse the transferred buffer to avoid allocations on the main thread
+
     data.creationTime.fill(creationTime);
     geometry.setAttribute('creationTime', new BufferAttribute(data.creationTime, 1));
-    
+
     geometry.setIndex(new BufferAttribute(data.vertices, 1));
-    return new Mesh(geometry, material);
+
+    // Compute bounding sphere immediately so Three.js frustum culling
+    // works without lazy per-frame computation on the main thread.
+    geometry.computeBoundingSphere();
+
+    const mesh = new Mesh(geometry, material);
+    mesh.frustumCulled = true;
+    return mesh;
   }
 
   private destroyChunkMeshes(chunk: LoadedChunk): void {
@@ -522,28 +622,58 @@ export default class ProceduralWorld extends Group {
   getChunkMeshes(): Mesh[] {
     const meshes: Mesh[] = [];
     for (const chunk of this.loadedChunks.values()) {
-        if (chunk.opaqueMesh) meshes.push(chunk.opaqueMesh);
-        if (chunk.waterMesh) meshes.push(chunk.waterMesh);
+        // Only include visible meshes — occlusion-culled chunks must not be raycast-clickable
+        if (chunk.opaqueMesh && chunk.opaqueMesh.visible) meshes.push(chunk.opaqueMesh);
+        if (chunk.waterMesh  && chunk.waterMesh.visible)  meshes.push(chunk.waterMesh);
     }
     return meshes;
   }
 
-  destroyBlock(point: Vector3, normal: Vector3): void {
-    const bx = Math.floor(point.x - normal.x * 0.001);
-    const by = Math.floor(point.y - normal.y * 0.001);
-    const bz = Math.floor(point.z - normal.z * 0.001);
+  /** INTERNAL: Modifies a block and triggers necessary chunk rebuilds. */
+  private setBlockAt(bx: number, by: number, bz: number, blockType: number): void {
     const key = this.keyForBlock(bx, by, bz);
     const chunk = this.loadedChunks.get(key);
     if (!chunk) return;
-    
+
     const lx = bx - chunk.data.startX;
     const ly = by - chunk.data.startY;
     const lz = bz - chunk.data.startZ;
     const idx = ly * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
-    
-    chunk.data.blocks[idx] = -1;
+
+    chunk.data.blocks[idx] = blockType;
+
+    // ── Immediately update this chunk's own borders so that adjacent
+    //    chunk rebuilds (dispatched below) see the correct block
+    //    instead of the stale value (fixes the transparent-face race condition).
+    const s = this.chunkSize;
+    if (lx === 0         && chunk.borders.negX) chunk.borders.negX[ly * s + lz] = blockType;
+    if (lx === s - 1     && chunk.borders.posX) chunk.borders.posX[ly * s + lz] = blockType;
+    if (ly === 0         && chunk.borders.negY) chunk.borders.negY[lz * s + lx] = blockType;
+    if (ly === s - 1     && chunk.borders.posY) chunk.borders.posY[lz * s + lx] = blockType;
+    if (lz === 0         && chunk.borders.negZ) chunk.borders.negZ[ly * s + lx] = blockType;
+    if (lz === s - 1     && chunk.borders.posZ) chunk.borders.posZ[ly * s + lx] = blockType;
+
     this.asyncRebuild(key, chunk);
     this.rebuildAdjacentChunks(bx, by, bz, chunk.data);
+  }
+
+  destroyBlock(point: Vector3, normal: Vector3): void {
+    const bx = Math.floor(point.x - normal.x * 0.5);
+    const by = Math.floor(point.y - normal.y * 0.5);
+    const bz = Math.floor(point.z - normal.z * 0.5);
+    
+    this.setBlockAt(bx, by, bz, -1);
+  }
+
+  addBlock(point: Vector3, normal: Vector3, blockType: number): void {
+    // Offset by +0.5 along normal to get to the empty space next to the hit face
+    const bx = Math.floor(point.x + normal.x * 0.5);
+    const by = Math.floor(point.y + normal.y * 0.5);
+    const bz = Math.floor(point.z + normal.z * 0.5);
+
+    // Basic collision check if player is at that position? 
+    // For now we just place it.
+    this.setBlockAt(bx, by, bz, blockType);
   }
 
   getBlock(bx: number, by: number, bz: number): number {
@@ -756,6 +886,124 @@ export default class ProceduralWorld extends Group {
     // Either all anticipated neighbors are fully generated! Or the chunk already has a mesh and needs to update borders!
     this.rebuildSet.add(chunkKey);
     this.rebuildQueue.push(chunkKey);
+  }
+
+  // ─── Occlusion Culling ────────────────────────────────────────────────────
+
+  /** Shows the wireframe outline at the given block grid position. */
+  public setBlockOutline(bx: number, by: number, bz: number, isBreaking: boolean = false): void {
+    this.blockOutline.position.set(bx + 0.5, by + 0.5, bz + 0.5);
+    this.blockOutline.visible = true;
+    this.blockEdge.position.set(bx + 0.5, by + 0.5, bz + 0.5);
+    this.blockEdge.visible = true;
+
+    // Use black/dark gray for both states as requested (the red was confusing)
+    this.blockOutlineMat.color.set(0x000000);
+    this.blockEdgeMat.color.set(0x000000);
+
+    if (isBreaking) {
+      this.blockOutlineMat.opacity = 0.5; // Start at 0.5 for breaking
+      this.blockEdgeMat.opacity = 0.9;
+    } else {
+      this.blockOutlineMat.opacity = 0.12; // Start at low for normal
+      this.blockEdgeMat.opacity = 0.8;
+    }
+  }
+
+  /** Hides the block highlight. */
+  public clearBlockOutline(): void {
+    this.blockOutline.visible = false;
+    this.blockEdge.visible    = false;
+  }
+
+  /** Called by Player when switching between debug/survival modes. */
+  public setDebugMode(debug: boolean): void {
+    this.isDebugMode = debug;
+    if (debug) {
+      // Immediately reveal all chunks when entering debug mode
+      for (const chunk of this.loadedChunks.values()) {
+        if (chunk.opaqueMesh) chunk.opaqueMesh.visible = true;
+        if (chunk.waterMesh)  chunk.waterMesh.visible  = true;
+      }
+    } else {
+      // Force immediate occlusion pass when switching to survival
+      this.occlusionDirty = true;
+    }
+  }
+
+  /** Returns true if every block in a border slice is opaque solid. */
+  private isBorderSolid(border: Int8Array | undefined): boolean {
+    if (!border) return false; // neighbour not loaded = unknown, treat as open
+    for (let i = 0; i < border.length; i++) {
+      const b = border[i];
+      if (b < 0 || b === BlockType.Water || b === BlockType.Empty) return false;
+    }
+    return true;
+  }
+
+  /**
+   * A chunk is "enclosed" when ALL 6 neighbouring chunks have a fully solid
+   * face pressed against it — meaning no light (or player view) can enter.
+   *
+   * The key fix: we must look at the NEIGHBOUR's border slice that faces THIS
+   * chunk, not this chunk's own borders.
+   *   - negX neighbour's posX face seals our left side
+   *   - posX neighbour's negX face seals our right side
+   *   - etc.
+   */
+  private isChunkEnclosed(chunk: LoadedChunk): boolean {
+    const { startX, startY, startZ } = chunk.data;
+    const s = this.chunkSize;
+
+    const nxChunk = this.loadedChunks.get(this.chunkKey(startX - s, startY, startZ));
+    const pxChunk = this.loadedChunks.get(this.chunkKey(startX + s, startY, startZ));
+    const nyChunk = this.loadedChunks.get(this.chunkKey(startX, startY - s, startZ));
+    const pyChunk = this.loadedChunks.get(this.chunkKey(startX, startY + s, startZ));
+    const nzChunk = this.loadedChunks.get(this.chunkKey(startX, startY, startZ - s));
+    const pzChunk = this.loadedChunks.get(this.chunkKey(startX, startY, startZ + s));
+
+    // Each neighbour's face that touches this chunk must be fully solid.
+    // If a neighbour is not loaded we cannot confirm the seal → not enclosed.
+    return (
+      this.isBorderSolid(nxChunk?.borders.posX) &&
+      this.isBorderSolid(pxChunk?.borders.negX) &&
+      this.isBorderSolid(nyChunk?.borders.posY) &&
+      this.isBorderSolid(pyChunk?.borders.negY) &&
+      this.isBorderSolid(nzChunk?.borders.posZ) &&
+      this.isBorderSolid(pzChunk?.borders.negZ)
+    );
+  }
+
+  /**
+   * Hides meshes of fully-enclosed chunks.
+   * Skipped entirely in debug mode (player can fly through solid walls).
+   * The chunk the camera is currently inside is always kept visible.
+   */
+  private updateOcclusion(): void {
+    if (this.isDebugMode) return;
+
+    const camX = this.camera.position.x;
+    const camY = this.camera.position.y;
+    const camZ = this.camera.position.z;
+
+    for (const chunk of this.loadedChunks.values()) {
+      if (!chunk.opaqueMesh && !chunk.waterMesh) continue;
+
+      let visible = true;
+
+      if (this.isChunkEnclosed(chunk)) {
+        const { startX, endX, startY, endY, startZ, endZ } = chunk.data;
+        // Keep visible if the camera is literally inside this chunk
+        const cameraInside =
+          camX >= startX && camX < endX &&
+          camY >= startY && camY < endY &&
+          camZ >= startZ && camZ < endZ;
+        visible = cameraInside;
+      }
+
+      if (chunk.opaqueMesh) chunk.opaqueMesh.visible = visible;
+      if (chunk.waterMesh)  chunk.waterMesh.visible  = visible;
+    }
   }
 
   private getTemperatureAt(x: number, z: number): number {

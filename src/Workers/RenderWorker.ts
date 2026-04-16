@@ -2,6 +2,7 @@ import { PerspectiveCamera, Scene, WebGLRenderer } from 'three';
 import ProceduralWorld from '../classes/Worlds/ProceduralWorld';
 import Player from '../classes/Player';
 import PlayerInteraction from '../classes/PlayerInteraction';
+import NetworkClient from '../classes/Network/NetworkClient';
 
 let renderer: WebGLRenderer;
 let scene: Scene;
@@ -9,6 +10,7 @@ let camera: PerspectiveCamera;
 let world: ProceduralWorld;
 let player: Player;
 let interaction: PlayerInteraction;
+let networkClient: NetworkClient;
 let isStarted = false;
 
 const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio: number) => {
@@ -24,12 +26,40 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
   scene.add(world);
 
   player = new Player({ camera, world, mode: 'debug' });
-  interaction = new PlayerInteraction(camera, world);
+  interaction = new PlayerInteraction(camera, world, (point, normal) => {
+      if (networkClient) {
+          networkClient.broadcastBlockBreak(point.x, point.y, point.z);
+      }
+  }, (point, normal, type) => {
+      if (networkClient) {
+          networkClient.broadcastBlockPlace(point.x, point.y, point.z, type);
+      }
+  }, (type: number) => {
+      self.postMessage({ type: 'selection_change', payload: { type } });
+  });
+
+  networkClient = new NetworkClient(world, player);
+
+  networkClient.onWorldInit = (config) => {
+    self.postMessage({ type: 'world_init', config });
+  };
+
+  networkClient.onWorldRegen = (config) => {
+    self.postMessage({ type: 'world_regen', config });
+  };
+
+  let lastTime = performance.now();
 
   const loop = () => {
+    const now = performance.now();
+    const delta = now - lastTime;
+    lastTime = now;
+
     if (isStarted) {
         player.update();
+        interaction?.update();  // update block hover outline every frame
         world.tick();
+        networkClient.update(now, delta);
     }
     renderer.render(scene, camera);
 
@@ -70,14 +100,16 @@ self.onmessage = (e: MessageEvent) => {
     }
   } else if (type === 'keydown') {
     player?.onKeyDown(payload.key);
+    interaction?.onKeyDown(payload.key);
   } else if (type === 'keyup') {
     player?.onKeyUp(payload.key);
   } else if (type === 'mousemove') {
     player?.onMouseMove(payload.movementX, payload.movementY);
   } else if (type === 'mousedown') {
-    interaction?.triggerClick();
+    interaction?.triggerClick(payload.button);
   } else if (type === 'lock_state') {
     player?.setLock(payload.isLocked);
+    interaction?.setLock(payload.isLocked);
   } else if (type === 'command') {
     handleCommand(payload.command, payload.args);
   }
@@ -88,6 +120,8 @@ function handleCommand(cmd: string, args: string[]) {
   switch (cmd) {
     case '/start':
       isStarted = true;
+      const protocol = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      networkClient.connect(`${protocol}//${self.location.host}/ws`);
       break;
     case '/time':
       world.setTime(args[0] || 'noon');
@@ -115,6 +149,7 @@ function handleCommand(cmd: string, args: string[]) {
       const worldType = args[0] as any;
       world.reset(worldType ? { worldType } : undefined);
       player.teleport(0, 40, 0);
+      networkClient.broadcastWorldConfig({ type: worldType || 'standard' });
       break;
     case '/set':
       if (args[0] === 'chunk' && args[1] === 'height' && args[2]) {

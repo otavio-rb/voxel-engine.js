@@ -39,6 +39,9 @@ export default class Player {
     this.velocity.set(0, 0, 0); // Reset velocity to avoid "sliding" into blocks
     if (mode === 'debug') {
       this.isGrounded = false;
+      this.world.setDebugMode(true);  // disable occlusion culling in creative mode
+    } else {
+      this.world.setDebugMode(false); // enable occlusion culling in survival mode
     }
   }
 
@@ -205,8 +208,8 @@ export default class Player {
         this.camera.position.z = nextPos.z;
     }
 
-    // 3. Fall Reset
-    if (this.camera.position.y < -50) {
+    // 3. Fall Reset (only if absurdly far below the world)
+    if (this.camera.position.y < -500) {
       this.camera.position.set(0, 41.6, 0);
       this.velocity.set(0, 0, 0);
     }
