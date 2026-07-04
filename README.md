@@ -56,7 +56,7 @@ Uma **Voxel Engine** desenvolvida em **JavaScript** utilizando **Three.js**, com
 
 ---
 
-## 🧠 Inteligência Artificial
+## 🧠 Identidades
 
 - ✅ Máquina de estados (*Finite State Machine*) para controle de animais
 
