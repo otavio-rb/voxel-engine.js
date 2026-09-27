@@ -3,149 +3,26 @@
   src: url(/fonts/Minecraft.ttf) format("truetype");
 }
 
-/* --- Menu Overlay --- */
-.menu-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
+/* --- Reset Básico --- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(10px);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-  transition: opacity 0.3s ease;
-}
-
-.menu-overlay.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.menu-content {
-  background: rgba(25, 25, 25, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 24px;
-  padding: 40px;
-  max-width: 600px;
-  width: 90%;
-  text-align: center;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-  animation: slideUp 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-@keyframes slideUp {
-  from { transform: translateY(30px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-.menu-content h1 {
-  font-size: 3rem;
-  margin-bottom: 8px;
-  background: linear-gradient(135deg, #fff 0%, #aaa 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  font-weight: 800;
-}
-
-.menu-content p {
-  color: #888;
-  margin-bottom: 32px;
-}
-
-.world-options {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-  margin-bottom: 32px;
-}
-
-.world-btn {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  padding: 16px 20px;
-  color: #fff;
-  text-align: left;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-}
-
-.world-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  transform: translateX(4px);
-  border-color: rgba(255, 255, 255, 0.3);
-}
-
-.world-btn.active {
-  background: rgba(76, 175, 80, 0.15);
-  border-color: #4CAF50;
-  box-shadow: 0 0 20px rgba(76, 175, 80, 0.2);
-}
-
-.btn-title {
-  font-weight: 700;
-  font-size: 1.1rem;
-  margin-bottom: 4px;
-}
-
-.btn-desc {
-  font-size: 0.85rem;
-  color: #999;
-}
-
-.menu-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-}
-
-.primary-btn {
-  background: #4CAF50;
-  color: #fff;
-  border: none;
-  padding: 14px 32px;
-  border-radius: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.primary-btn:hover {
-  background: #45a049;
-  transform: scale(1.05);
-  box-shadow: 0 10px 20px rgba(76, 175, 80, 0.3);
-}
-
-.secondary-btn {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-  border: none;
-  padding: 14px 32px;
-  border-radius: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.secondary-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-* {
-  padding: 0;
-  margin: 0;
-  font-family: Minecraft, sans-serif;
-  font-size: 12px;
   overflow: hidden;
+  font-family: Minecraft, monospace, sans-serif;
+  background-color: #000000;
+  color: #ffffff;
+  user-select: none;
+  -webkit-font-smoothing: none;
+  image-rendering: pixelated;
 }
 
-
+/* --- Canvas 3D --- */
 #scene {
   position: fixed;
   top: 0;
@@ -153,6 +30,7 @@
   width: 100%;
   height: 100%;
   z-index: 0;
+  display: block;
 }
 
 #underwater-overlay {
@@ -161,13 +39,190 @@
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 120, 255, 0.45);
+  background: rgba(0, 60, 180, 0.45);
   pointer-events: none;
   z-index: 10;
   display: none;
-  mix-blend-mode: color;
+  mix-blend-mode: multiply;
 }
 
+/* --- Menu Overlay Clássico (Minecraft / Voxel) --- */
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  transition: opacity 0.15s ease;
+}
+
+.menu-overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Painel Retrô de Pedra/Ardósia */
+.mc-panel {
+  background: #2b2b2b;
+  border: 3px solid #000000;
+  box-shadow: 
+    inset 3px 3px 0px 0px #4d4d4d, 
+    inset -3px -3px 0px 0px #181818,
+    0 10px 30px rgba(0, 0, 0, 0.8);
+  padding: 24px 28px;
+  max-width: 620px;
+  width: 90%;
+  text-align: center;
+  position: relative;
+  z-index: 2;
+}
+
+.mc-title {
+  font-family: Minecraft, sans-serif;
+  font-size: 24px;
+  color: #ffffff;
+  text-shadow: 2px 2px 0px #3f3f3f;
+  margin-bottom: 22px;
+  letter-spacing: 1px;
+}
+
+.mc-section {
+  margin-bottom: 18px;
+  text-align: left;
+}
+
+.mc-section-header {
+  margin-bottom: 8px;
+}
+
+.mc-label {
+  font-family: Minecraft, sans-serif;
+  font-size: 13px;
+  color: #b0b0b0;
+  text-shadow: 1px 1px 0px #111111;
+  text-transform: uppercase;
+}
+
+/* Grid de Botões de Mundo */
+.mc-world-grid {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+/* Botão Padrão estilo Minecraft (Bevel Chanfrado 3D) */
+.mc-btn {
+  font-family: Minecraft, sans-serif;
+  font-size: 14px;
+  color: #e0e0e0;
+  text-shadow: 2px 2px 0px #1a1a1a;
+  background: #6e6e6e;
+  border: 2px solid #000000;
+  box-shadow: 
+    inset 2px 2px 0px 0px #9c9c9c, 
+    inset -2px -2px 0px 0px #3d3d3d;
+  padding: 8px 12px;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  border-radius: 0;
+  flex: 1 1 auto;
+  text-align: center;
+  transition: none;
+}
+
+.mc-btn:hover {
+  background: #7e7e7e;
+  color: #ffffa0; /* Amarelo clássico de hover do Minecraft */
+  text-shadow: 2px 2px 0px #2a2a00;
+  box-shadow: 
+    inset 2px 2px 0px 0px #b0b0b0, 
+    inset -2px -2px 0px 0px #4a4a4a;
+}
+
+.mc-btn:active {
+  background: #505050;
+  box-shadow: 
+    inset 2px 2px 0px 0px #2a2a2a, 
+    inset -2px -2px 0px 0px #606060;
+}
+
+/* Estado Ativo / Selecionado com Borda Branca */
+.mc-btn.active {
+  background: #4a4a4a;
+  border-color: #ffffff;
+  color: #ffffff;
+  box-shadow: 
+    inset 2px 2px 0px 0px #252525, 
+    inset -2px -2px 0px 0px #686868;
+}
+
+/* Caixa de Descrição Simples */
+.mc-desc-box {
+  background: #141414;
+  border: 2px solid #3c3c3c;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #b0b0b0;
+  text-shadow: 1px 1px 0px #000000;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  line-height: 1.4;
+}
+
+/* Opções de Jogo */
+.mc-options-grid {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.mc-option-item {
+  flex: 1;
+  text-align: left;
+}
+
+.mc-btn-full {
+  width: 100%;
+  padding: 10px;
+}
+
+.mc-subdesc {
+  font-size: 11px;
+  color: #808080;
+  margin-top: 4px;
+  text-shadow: 1px 1px 0px #000000;
+  text-align: center;
+}
+
+/* Botões de Ação Principais */
+.mc-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.mc-btn-action {
+  flex: 1;
+  padding: 12px 16px;
+  font-size: 15px;
+}
+
+/* Rodapé de Dicas */
+.mc-footer-tips {
+  font-size: 11px;
+  color: #707070;
+  text-shadow: 1px 1px 0px #000000;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+/* --- Elementos In-Game --- */
 #crosshair {
   position: absolute;
   top: 50%;
@@ -181,16 +236,18 @@
   );
   z-index: 2;
   mix-blend-mode: difference;
+  pointer-events: none;
 }
 
 #debug, #stats-overlay {
   position: fixed;
-  background: white; /* Opaque white */
-  padding: 10px 14px;
-  color: black;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid #3c3c3c;
+  padding: 8px 12px;
+  color: #e0e0e0;
   font-family: monospace;
-  font-size: 14px;
-  z-index: 2000;
+  font-size: 12px;
+  z-index: 500;
   line-height: 1.4;
   pointer-events: none;
 }
@@ -208,18 +265,18 @@
 
 #stats {
   white-space: pre-line;
-  line-height: 1.5;
+  line-height: 1.4;
+  font-family: monospace;
 }
 
 #interface {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   pointer-events: none;
+  z-index: 20;
 }
 
+/* --- Hotbar --- */
 #hotbar {
   position: absolute;
   bottom: 20px;
@@ -227,110 +284,145 @@
   transform: translateX(-50%);
   display: flex;
   gap: 4px;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid #3c3c3c;
   padding: 4px;
-  border-radius: 8px;
   pointer-events: auto;
-  z-index: 20;
+  z-index: 30;
 }
 
 .hotbar-slot {
   width: 48px;
   height: 48px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 2px solid transparent;
-  border-radius: 4px;
+  background: rgba(40, 40, 40, 0.75);
+  border: 2px solid #3c3c3c;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   color: white;
-  font-size: 0.8rem;
-  transition: all 0.2s ease;
+  transition: none;
   overflow: hidden;
   position: relative;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hotbar-slot:hover {
+  background: rgba(70, 70, 70, 0.85);
+  border-color: #888888;
 }
 
 .hotbar-slot.selected {
-  border-color: #4CAF50;
-  background: rgba(76, 175, 80, 0.2);
-  transform: translateY(-4px);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  border-color: #ffffff;
+  background: rgba(100, 100, 100, 0.85);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4);
 }
+
+.slot-key {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  font-size: 8px;
+  font-family: Minecraft, sans-serif;
+  color: #aaaaaa;
+}
+
+.slot-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 2px;
+  margin-top: -8px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+}
+
+.hotbar-slot[data-block="2"] .slot-icon { background: #557a2b; }
+.hotbar-slot[data-block="0"] .slot-icon { background: #737373; }
+.hotbar-slot[data-block="1"] .slot-icon { background: #866043; }
+.hotbar-slot[data-block="3"] .slot-icon { background: #d0c58e; }
+.hotbar-slot[data-block="4"] .slot-icon { background: #e0f2f1; }
+.hotbar-slot[data-block="9"] .slot-icon { background: #6d5032; }
+.hotbar-slot[data-block="10"] .slot-icon { background: #2f6828; }
+.hotbar-slot[data-block="7"] .slot-icon { background: #222222; }
+.hotbar-slot[data-block="6"] .slot-icon { background: #2d73dc; box-shadow: 0 0 6px rgba(45, 115, 220, 0.8); }
 
 .slot-label {
   position: absolute;
-  bottom: 2px;
-  font-size: 0.6rem;
-  background: rgba(0, 0, 0, 0.5);
+  bottom: 1px;
+  font-size: 9px;
+  font-family: Minecraft, sans-serif;
+  background: rgba(0, 0, 0, 0.75);
   width: 100%;
   text-align: center;
+  padding: 1px 0;
+  color: #f0f0f0;
 }
 
+/* --- Chat --- */
 .chat-wrapper {
   position: absolute;
-  bottom: 40px;
+  bottom: 24px;
   left: 20px;
-  width: 600px;
+  width: 500px;
   max-width: 90vw;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   pointer-events: auto;
-  z-index: 5;
+  z-index: 40;
 }
 
 .chat {
   width: 100%;
-  height: 300px;
+  height: 240px;
   color: white;
-  background-color: rgba(0, 0, 0, 0.7);
-  padding: 12px;
+  background-color: rgba(0, 0, 0, 0.65);
+  padding: 10px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   pointer-events: none;
-  transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out;
-  border-radius: 4px;
+  border-radius: 0;
+  font-family: Minecraft, monospace;
 }
 
 .chat.hidden {
   opacity: 0;
-  transform: translateX(-10px);
 }
 
 .chat::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
-
-.chat::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.1);
-}
-
 .chat::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
-  border-radius: 3px;
-}
-
-.chat::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.4);
 }
 
 .chat-message {
-  font-size: 1.4rem;
-  text-shadow: 1px 1px 2px black;
-  margin-bottom: 4px;
+  font-size: 13px;
+  font-family: Minecraft, monospace;
+  text-shadow: 1px 1px 2px #000;
+  margin-bottom: 3px;
   word-wrap: break-word;
+  line-height: 1.35;
+}
+
+.chat-input-container {
+  width: 100%;
 }
 
 .chat-input {
   width: 100%;
-  padding: 12px;
-  border: none;
+  padding: 10px 12px;
+  border: 2px solid #555555;
   background-color: rgba(0, 0, 0, 0.85);
   color: white;
-  font-size: 1.4rem;
+  font-size: 13px;
+  font-family: Minecraft, monospace;
   outline: none;
   display: none;
-  border-radius: 4px;
+}
+
+.chat-input:focus {
+  border-color: #ffffff;
 }

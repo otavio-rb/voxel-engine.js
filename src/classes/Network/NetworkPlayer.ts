@@ -24,16 +24,14 @@ export class NetworkPlayer extends Group {
     }
 
     public update(deltaTime: number) {
-        // LERP for smooth interpolation between network updates
-        const lerpFactor = 0.2; // Adjust for smoothness vs responsiveness
+        // LERP frame-rate independent para interpolação suave
+        const dt = Math.min(deltaTime, 100) / 1000;
+        const lerpFactor = 1.0 - Math.exp(-12 * dt); // Suave e idêntico a 60, 144, 180+ FPS
 
         this.position.lerp(this.targetPosition, lerpFactor);
 
-        // Rotation interpolation (Simple lerp, avoiding quaternion complexity for now since it only rotates Y)
-        // Wait, simple lerp for angles can be weird if crossing PI/-PI, but for basic rotation it's fine for now.
+        // Interpolação de rotação Y
         const rotDiff = this.targetRotationY - this.rotation.y;
-        
-        // Normalize angle to -PI to PI
         let normalizedDiff = rotDiff;
         while (normalizedDiff > Math.PI) normalizedDiff -= Math.PI * 2;
         while (normalizedDiff < -Math.PI) normalizedDiff += Math.PI * 2;
