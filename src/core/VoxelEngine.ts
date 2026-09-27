@@ -3,6 +3,7 @@ import { WorldType } from '../types';
 import { BlockRegistry, blockRegistry, BlockConfig } from './BlockRegistry';
 import { WorldGenerator } from './world/WorldGenerator';
 import { WorldGeneratorRegistry, worldGeneratorRegistry } from './world/WorldGeneratorRegistry';
+import { EntityRegistry, entityRegistry, EntityFactory } from './entities/EntityRegistry';
 
 export interface VoxelEngineOptions {
   canvas: HTMLCanvasElement;
@@ -36,6 +37,7 @@ export interface BlockPlaceEvent {
 export class VoxelEngine extends EventEmitter {
   public readonly blocks: BlockRegistry = blockRegistry;
   public readonly generators: WorldGeneratorRegistry = worldGeneratorRegistry;
+  public readonly entities: EntityRegistry = entityRegistry;
   private readonly canvas: HTMLCanvasElement;
   private readonly worker: Worker;
 
@@ -143,6 +145,10 @@ export class VoxelEngine extends EventEmitter {
 
   public registerGenerator(generator: WorldGenerator): void {
     this.generators.register(generator);
+  }
+
+  public registerEntity(type: string, factory: EntityFactory): void {
+    this.entities.register(type, factory);
   }
 
   public selectBlock(type: number): void {

@@ -1,132 +1,95 @@
 import { Vector3, Mesh, BoxGeometry, MeshStandardMaterial, Scene } from 'three';
 import ProceduralWorld from '../Worlds/ProceduralWorld';
+import { KinematicBody } from '../../core/physics/AABBPhysics';
 
 export interface EntityDimensions {
-    width: number;
-    height: number;
+  width: number;
+  height: number;
+  depth?: number;
 }
 
 export abstract class Entity {
-    public readonly position: Vector3 = new Vector3();
-    public readonly velocity: Vector3 = new Vector3();
-    public mesh: Mesh;
-    
-    protected readonly world: ProceduralWorld;
-    protected readonly dimensions: EntityDimensions;
-    protected isGrounded: boolean = false;
-    protected gravity: number = 0.008;
-    protected friction: number = 0.9;
+  public readonly body: KinematicBody;
+  public mesh: Mesh;
+  protected readonly world: ProceduralWorld;
 
-    constructor(world: ProceduralWorld, dimensions: EntityDimensions, color: number = 0xffffff) {
-        this.world = world;
-        this.dimensions = dimensions;
-        
-        // Default visual: simple box
-        const geo = new BoxGeometry(dimensions.width, dimensions.height, dimensions.width);
-        const mat = new MeshStandardMaterial({ color });
-        this.mesh = new Mesh(geo, mat);
-        this.mesh.castShadow = true;
-        this.mesh.receiveShadow = true;
-    }
+  constructor(world: ProceduralWorld, dimensions: EntityDimensions, color: number = 0xffffff) {
+    this.world = world;
+    this.body = new KinematicBody({ dimensions });
 
-    public abstract update(deltaTime: number): void;
+    const geo = new BoxGeometry(dimensions.width, dimensions.height, dimensions.depth ?? dimensions.width);
+    const mat = new MeshStandardMaterial({ color });
+    this.mesh = new Mesh(geo, mat);
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
+  }
 
-    protected applyPhysics(dtScale: number = 1.0): void {
-        // Vertical Physics (Gravity)
-        this.velocity.y -= this.gravity * dtScale;
-        
-        const nextPos = this.position.clone();
+  public get position(): Vector3 {
+    return this.body.position;
+  }
 
-        // Solve X axis
-        nextPos.x += this.velocity.x * dtScale;
-        if (this.checkCollision(nextPos)) {
-            nextPos.x = this.position.x;
-            this.velocity.x = 0;
-            this.onCollision('x');
-        }
-        this.position.x = nextPos.x;
+  public get velocity(): Vector3 {
+    return this.body.velocity;
+  }
 
-        // Solve Y axis
-        nextPos.y += this.velocity.y * dtScale;
-        if (this.checkCollision(nextPos)) {
-            if (this.velocity.y < 0) this.isGrounded = true;
-            nextPos.y = this.position.y;
-            this.velocity.y = 0;
-            this.onCollision('y');
-        } else {
-            this.isGrounded = false;
-        }
-        this.position.y = nextPos.y;
+  public get isGrounded(): boolean {
+    return this.body.isGrounded;
+  }
 
-        // Solve Z axis
-        nextPos.z += this.velocity.z * dtScale;
-        if (this.checkCollision(nextPos)) {
-            nextPos.z = this.position.z;
-            this.velocity.z = 0;
-            this.onCollision('z');
-        }
-        this.position.z = nextPos.z;
+  public set isGrounded(value: boolean) {
+    this.body.isGrounded = value;
+  }
 
-        // Apply friction to horizontal movement (frame-rate independent)
-        const frictionFactor = Math.pow(this.friction, dtScale);
-        this.velocity.x *= frictionFactor;
-        this.velocity.z *= frictionFactor;
+  public get dimensions(): EntityDimensions {
+    return this.body.dimensions;
+  }
 
-        // Sync mesh position (adjust for center-origin mesh)
-        this.mesh.position.set(
-            this.position.x,
-            this.position.y + this.dimensions.height / 2,
-            this.position.z
-        );
-    }
+  public get gravity(): number {
+    return this.body.gravity;
+  }
 
-    protected checkCollision(pos: Vector3): boolean {
-        const w = this.dimensions.width / 2;
-        const h = this.dimensions.height;
-        
-        // Multi-point collision check
-        const points = [
-            // Bottom corners
-            { x: pos.x - w, y: pos.y, z: pos.z - w },
-            { x: pos.x + w, y: pos.y, z: pos.z - w },
-            { x: pos.x - w, y: pos.y, z: pos.z + w },
-            { x: pos.x + w, y: pos.y, z: pos.z + w },
-            
-            // Mid level
-            { x: pos.x - w, y: pos.y + h / 2, z: pos.z - w },
-            { x: pos.x + w, y: pos.y + h / 2, z: pos.z - w },
-            { x: pos.x - w, y: pos.y + h / 2, z: pos.z + w },
-            { x: pos.x + w, y: pos.y + h / 2, z: pos.z + w },
+  public set gravity(value: number) {
+    this.body.gravity = value;
+  }
 
-            // Top corners
-            { x: pos.x - w, y: pos.y + h, z: pos.z - w },
-            { x: pos.x + w, y: pos.y + h, z: pos.z - w },
-            { x: pos.x - w, y: pos.y + h, z: pos.z + w },
-            { x: pos.x + w, y: pos.y + h, z: pos.z + w },
-        ];
+  public get friction(): number {
+    return this.body.friction;
+  }
 
-        for (const p of points) {
-            if (this.world.isBlockSolid(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))) {
-                return true;
-            }
-        }
-        return false;
-    }
+  public set friction(value: number) {
+    this.body.friction = value;
+  }
 
-    protected onCollision(axis: 'x' | 'y' | 'z'): void {
-        // Callback for subclasses to handle collisions (e.g. jump when hitting a wall)
-    }
+  public abstract update(deltaTime: number): void;
 
-    public addToScene(scene: Scene): void {
-        scene.add(this.mesh);
-    }
+  protected applyPhysics(dtScale: number = 1.0): void {
+    this.body.stepPhysics(this.world, dtScale, true, (axis) => this.onCollision(axis));
 
-    public removeFromScene(scene: Scene): void {
-        scene.remove(this.mesh);
-    }
+    this.mesh.position.set(
+      this.body.position.x,
+      this.body.position.y + this.body.dimensions.height / 2,
+      this.body.position.z
+    );
+  }
 
-    public dispose(): void {
-        this.mesh.geometry.dispose();
-        (this.mesh.material as MeshStandardMaterial).dispose();
-    }
+  protected checkCollision(pos: Vector3): boolean {
+    return this.body.checkCollisionAt(pos, this.world);
+  }
+
+  protected onCollision(_axis: 'x' | 'y' | 'z'): void {
+    // Callback para subclasses tratarem colisões
+  }
+
+  public addToScene(scene: Scene): void {
+    scene.add(this.mesh);
+  }
+
+  public removeFromScene(scene: Scene): void {
+    scene.remove(this.mesh);
+  }
+
+  public dispose(): void {
+    this.mesh.geometry.dispose();
+    (this.mesh.material as MeshStandardMaterial).dispose();
+  }
 }
