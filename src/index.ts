@@ -1,6 +1,17 @@
-export { VoxelEngine, type VoxelEngineOptions, type EngineStats } from './core/VoxelEngine';
+export {
+  VoxelEngine,
+  type VoxelEngineOptions,
+  type EngineStats,
+  type BlockBreakEvent,
+  type BlockPlaceEvent
+} from './core/VoxelEngine';
 export { EventEmitter, type EventCallback } from './core/EventEmitter';
 export { BlockRegistry, blockRegistry, type BlockConfig } from './core/BlockRegistry';
+export {
+  raycastVoxel,
+  type VoxelRaycastHit,
+  type VoxelWorldReader
+} from './core/physics/VoxelRaycaster';
 export {
   type WorldGenerator,
   type ChunkContext
