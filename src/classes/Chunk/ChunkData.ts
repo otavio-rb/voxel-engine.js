@@ -29,6 +29,7 @@ export default class ChunkData {
   private readonly simplex: SimplexNoise;
 
   readonly blocks: Int8Array;
+  readonly waterLevels: Uint8Array;
 
   constructor({ size, startX, endX, startY, endY, startZ, endZ, worldParams, simplex }: ChunkDataParams) {
     this.size     = size;
@@ -44,6 +45,7 @@ export default class ChunkData {
     this.simplex = simplex ?? new SimplexNoise(new RNG(worldParams.seed));
 
     this.blocks = new Int8Array(size * size * size).fill(-1);
+    this.waterLevels = new Uint8Array(size * size * size).fill(0);
 
     this.generate();
   }
@@ -55,12 +57,18 @@ export default class ChunkData {
 
   private setBlock(x: number, y: number, z: number, type: BlockType): void {
     const i = this.idx(x, y, z);
-    if (i !== -1) this.blocks[i] = type;
+    if (i !== -1) {
+      this.blocks[i] = type;
+      this.waterLevels[i] = type === BlockType.Water ? 255 : 0;
+    }
   }
 
   private clearBlock(x: number, y: number, z: number): void {
     const i = this.idx(x, y, z);
-    if (i !== -1) this.blocks[i] = -1;
+    if (i !== -1) {
+      this.blocks[i] = -1;
+      this.waterLevels[i] = 0;
+    }
   }
 
   private getBlock(x: number, y: number, z: number): number {
@@ -493,6 +501,7 @@ export default class ChunkData {
       startZ: this.startZ,
       endZ:   this.endZ,
       blocks: this.blocks,
+      waterLevels: this.waterLevels,
     };
   }
 }

@@ -120,11 +120,12 @@ export default class Player {
     return false;
   }
 
-  private applyPhysics(): void {
+  private applyPhysics(dtScale: number = 1.0): void {
     if (!this.canMove) return;
 
     // 1. Calculate Intent
-    const moveSpeed = this.mode === 'debug' ? 0.6 : 0.12;
+    const baseSpeed = this.mode === 'debug' ? 0.6 : 0.12;
+    const moveSpeed = baseSpeed * dtScale;
 
     const moveDir = new Vector3();
     if (this.keys['w']) moveDir.z += 1;
@@ -156,7 +157,7 @@ export default class Player {
         if (this.keys['shift'] || this.keys['control']) this.camera.position.y -= moveSpeed;
     } else {
         if (inWater) {
-            this.velocity.y -= this.gravity * 0.2;
+            this.velocity.y -= this.gravity * 0.2 * dtScale;
             this.velocity.y = Math.max(this.velocity.y, -0.05);
 
             if (this.keys[' ']) {
@@ -168,7 +169,7 @@ export default class Player {
                 }
             }
         } else {
-            this.velocity.y -= this.gravity;
+            this.velocity.y -= this.gravity * dtScale;
         }
     }
 
@@ -188,8 +189,8 @@ export default class Player {
         }
         this.camera.position.x = nextPos.x;
 
-        // Y
-        nextPos.y += this.velocity.y;
+        // Y (deslocamento vertical proporcional a dtScale)
+        nextPos.y += this.velocity.y * dtScale;
         if (this.isColliding(nextPos)) {
             if (this.velocity.y < 0) this.isGrounded = true;
             nextPos.y = this.camera.position.y;
@@ -215,7 +216,7 @@ export default class Player {
     }
   }
 
-  update(): void {
-    this.applyPhysics();
+  public update(dtScale: number = 1.0): void {
+    this.applyPhysics(dtScale);
   }
 }

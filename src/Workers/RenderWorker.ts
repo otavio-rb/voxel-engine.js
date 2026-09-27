@@ -52,13 +52,19 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
 
   const loop = () => {
     const now = performance.now();
-    const delta = now - lastTime;
+    let delta = now - lastTime;
     lastTime = now;
 
+    // Evita saltos temporais anômalos em minimização de aba ou travamentos
+    if (delta > 100) delta = 100;
+    if (delta <= 0) delta = 16.6667;
+
+    const dtScale = delta / (1000 / 60); // 1.0 a 60 FPS
+
     if (isStarted) {
-        player.update();
+        player.update(dtScale);
         interaction?.update();  // update block hover outline every frame
-        world.tick();
+        world.tick(delta);
         networkClient.update(now, delta);
     }
     renderer.render(scene, camera);
@@ -110,6 +116,12 @@ self.onmessage = (e: MessageEvent) => {
   } else if (type === 'lock_state') {
     player?.setLock(payload.isLocked);
     interaction?.setLock(payload.isLocked);
+  } else if (type === 'select_block') {
+    interaction?.setSelectedBlockType(payload.type);
+  } else if (type === 'select_slot') {
+    interaction?.selectSlot(payload.index);
+  } else if (type === 'wheel') {
+    interaction?.onWheel(payload.direction);
   } else if (type === 'command') {
     handleCommand(payload.command, payload.args);
   }

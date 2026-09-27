@@ -31,14 +31,14 @@ export abstract class Entity {
 
     public abstract update(deltaTime: number): void;
 
-    protected applyPhysics(): void {
+    protected applyPhysics(dtScale: number = 1.0): void {
         // Vertical Physics (Gravity)
-        this.velocity.y -= this.gravity;
+        this.velocity.y -= this.gravity * dtScale;
         
         const nextPos = this.position.clone();
 
         // Solve X axis
-        nextPos.x += this.velocity.x;
+        nextPos.x += this.velocity.x * dtScale;
         if (this.checkCollision(nextPos)) {
             nextPos.x = this.position.x;
             this.velocity.x = 0;
@@ -47,7 +47,7 @@ export abstract class Entity {
         this.position.x = nextPos.x;
 
         // Solve Y axis
-        nextPos.y += this.velocity.y;
+        nextPos.y += this.velocity.y * dtScale;
         if (this.checkCollision(nextPos)) {
             if (this.velocity.y < 0) this.isGrounded = true;
             nextPos.y = this.position.y;
@@ -59,7 +59,7 @@ export abstract class Entity {
         this.position.y = nextPos.y;
 
         // Solve Z axis
-        nextPos.z += this.velocity.z;
+        nextPos.z += this.velocity.z * dtScale;
         if (this.checkCollision(nextPos)) {
             nextPos.z = this.position.z;
             this.velocity.z = 0;
@@ -67,9 +67,10 @@ export abstract class Entity {
         }
         this.position.z = nextPos.z;
 
-        // Apply friction to horizontal movement
-        this.velocity.x *= this.friction;
-        this.velocity.z *= this.friction;
+        // Apply friction to horizontal movement (frame-rate independent)
+        const frictionFactor = Math.pow(this.friction, dtScale);
+        this.velocity.x *= frictionFactor;
+        this.velocity.z *= frictionFactor;
 
         // Sync mesh position (adjust for center-origin mesh)
         this.mesh.position.set(
