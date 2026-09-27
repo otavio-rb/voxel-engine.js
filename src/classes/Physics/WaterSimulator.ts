@@ -1,4 +1,5 @@
 import { BlockType, ChunkDataResult } from '../../types';
+import { blockRegistry } from '../../core/BlockRegistry';
 
 export interface WorldWaterAccess {
   getBlock(wx: number, wy: number, wz: number): number;
@@ -63,12 +64,12 @@ export default class WaterSimulator {
           if (currentType === BlockType.Water && currentLevel > 0) {
             const blockAbove = world.getBlock(wx, wy + 1, wz);
             const levelAbove = world.getWaterLevel(wx, wy + 1, wz);
-            const isFedFromAbove = (blockAbove === BlockType.Water && levelAbove > 0);
+            const isFedFromAbove = (blockRegistry.isFluid(blockAbove) && levelAbove > 0);
             const isSource = (currentLevel === this.SOURCE_LEVEL && !isFedFromAbove);
 
             // 1. Queda Vertical (Gravidade)
             const blockBelow = world.getBlock(wx, wy - 1, wz);
-            const canFall = (blockBelow === -1 || blockBelow === BlockType.Empty || blockBelow === BlockType.Water);
+            const canFall = !blockRegistry.isSolid(blockBelow);
 
             if (canFall) {
               const levelBelow = world.getWaterLevel(wx, wy - 1, wz);
@@ -103,7 +104,7 @@ export default class WaterSimulator {
 
                 for (const n of neighbors) {
                   const nBlock = world.getBlock(n.wx, wy, n.wz);
-                  const canEnter = (nBlock === -1 || nBlock === BlockType.Empty || nBlock === BlockType.Water);
+                  const canEnter = !blockRegistry.isSolid(nBlock);
 
                   if (canEnter) {
                     const nLevel = world.getWaterLevel(n.wx, wy, n.wz);

@@ -3,6 +3,8 @@ import ProceduralWorld from '../classes/Worlds/ProceduralWorld';
 import Player from '../classes/Player';
 import PlayerInteraction from '../classes/PlayerInteraction';
 import NetworkClient from '../classes/Network/NetworkClient';
+import { blockRegistry } from '../core/BlockRegistry';
+import { syncBlockTypes } from '../constants/block-types';
 
 let renderer: WebGLRenderer;
 let scene: Scene;
@@ -122,6 +124,9 @@ self.onmessage = (e: MessageEvent) => {
     interaction?.selectSlot(payload.index);
   } else if (type === 'wheel') {
     interaction?.onWheel(payload.direction);
+  } else if (type === 'register_block') {
+    blockRegistry.register(payload);
+    syncBlockTypes();
   } else if (type === 'command') {
     handleCommand(payload.command, payload.args);
   }

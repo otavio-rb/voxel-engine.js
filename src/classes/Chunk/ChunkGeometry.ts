@@ -1,6 +1,7 @@
 import blockSides from '../../constants/block-sides';
 import blockTypes from '../../constants/block-types';
 import { BlockType, ChunkBorders, ChunkDataResult } from '../../types';
+import { blockRegistry } from '../../core/BlockRegistry';
 
 export default class ChunkGeometry {
   private opaquePositions: number[] = [];
@@ -108,7 +109,7 @@ export default class ChunkGeometry {
       startX: number, startY: number, startZ: number, size: number
   ): number {
     const t = this.getNeighbourBlock(nx, ny, nz, blocks, borders, startX, startY, startZ, size);
-    return (t !== -1 && t !== BlockType.Empty && t !== BlockType.Water) ? 1 : 0;
+    return blockRegistry.isSolid(t) ? 1 : 0;
   }
 
   private vertexAO(side1: number, side2: number, corner: number): number {
@@ -251,7 +252,7 @@ export default class ChunkGeometry {
             // vertex density and the GPU's linear interpolation loses the wave shape
             // (a 32-unit quad has only 4 verts, missing all intermediate sine cycles).
             // Solid blocks have no per-vertex displacement so greedy is safe for them.
-            const isWater = type === BlockType.Water;
+            const isWater = blockRegistry.isFluid(type);
             let w = 1;
             if (!isWater) {
               while (k + w < size) {

@@ -1,5 +1,6 @@
 import { EventEmitter } from './EventEmitter';
 import { WorldType } from '../types';
+import { BlockRegistry, blockRegistry, BlockConfig } from './BlockRegistry';
 
 export interface VoxelEngineOptions {
   canvas: HTMLCanvasElement;
@@ -19,6 +20,7 @@ export interface EngineStats {
 }
 
 export class VoxelEngine extends EventEmitter {
+  public readonly blocks: BlockRegistry = blockRegistry;
   private readonly canvas: HTMLCanvasElement;
   private readonly worker: Worker;
 
@@ -117,6 +119,11 @@ export class VoxelEngine extends EventEmitter {
 
   public setInputBlocked(blocked: boolean): void {
     this.isInputBlocked = blocked;
+  }
+
+  public registerBlock(config: BlockConfig): void {
+    this.blocks.register(config);
+    this.worker.postMessage({ type: 'register_block', payload: config });
   }
 
   public selectBlock(type: number): void {
