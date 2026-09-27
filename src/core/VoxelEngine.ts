@@ -21,6 +21,18 @@ export interface EngineStats {
   isUnderwater: boolean;
 }
 
+export interface BlockBreakEvent {
+  position: { x: number; y: number; z: number };
+  normal: { x: number; y: number; z: number };
+  blockType?: number;
+}
+
+export interface BlockPlaceEvent {
+  position: { x: number; y: number; z: number };
+  normal: { x: number; y: number; z: number };
+  blockType: number;
+}
+
 export class VoxelEngine extends EventEmitter {
   public readonly blocks: BlockRegistry = blockRegistry;
   public readonly generators: WorldGeneratorRegistry = worldGeneratorRegistry;
@@ -167,6 +179,8 @@ export class VoxelEngine extends EventEmitter {
 
       if (type === 'stats') {
         this.emit('stats', stats as EngineStats);
+      } else if (type === 'event') {
+        this.emit(e.data.event, payload);
       } else if (type === 'world_init') {
         this.emit('world_init', config);
       } else if (type === 'world_regen') {

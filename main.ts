@@ -1,7 +1,7 @@
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 import UI, { UIStats } from './src/classes/UI';
 import { WorldType } from './src/types';
-import { VoxelEngine, EngineStats } from './src/index';
+import { VoxelEngine, EngineStats, BlockBreakEvent, BlockPlaceEvent } from './src/index';
 
 const WORLD_DESCRIPTIONS: Record<string, string> = {
   [WorldType.Standard]: 'Mundo padrão: Colinas, florestas, praias e cavernas procedurais.',
@@ -115,6 +115,14 @@ class Game {
       if (typeof type === 'number') {
         this.ui.updateSelectedBlock(type);
       }
+    });
+
+    this.engine.on<BlockBreakEvent>('block:break', ({ position, blockType }) => {
+      // Evento de bloco quebrado disparado pela engine
+    });
+
+    this.engine.on<BlockPlaceEvent>('block:place', ({ position, blockType }) => {
+      // Evento de bloco colocado disparado pela engine
     });
 
     this.engine.on<{ isLocked: boolean; wasLocked: boolean }>('lock_change', ({ isLocked, wasLocked }) => {

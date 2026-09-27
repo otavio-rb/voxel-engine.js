@@ -28,17 +28,41 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
   scene.add(world);
 
   player = new Player({ camera, world, mode: 'debug' });
-  interaction = new PlayerInteraction(camera, world, (point, normal) => {
+  interaction = new PlayerInteraction(
+    camera,
+    world,
+    (pos, normal, blockType) => {
       if (networkClient) {
-          networkClient.broadcastBlockBreak(point.x, point.y, point.z);
+        networkClient.broadcastBlockBreak(pos.x, pos.y, pos.z);
       }
-  }, (point, normal, type) => {
+      self.postMessage({
+        type: 'event',
+        event: 'block:break',
+        payload: {
+          position: { x: pos.x, y: pos.y, z: pos.z },
+          normal: { x: normal.x, y: normal.y, z: normal.z },
+          blockType
+        }
+      });
+    },
+    (pos, normal, type) => {
       if (networkClient) {
-          networkClient.broadcastBlockPlace(point.x, point.y, point.z, type);
+        networkClient.broadcastBlockPlace(pos.x, pos.y, pos.z, type);
       }
-  }, (type: number) => {
+      self.postMessage({
+        type: 'event',
+        event: 'block:place',
+        payload: {
+          position: { x: pos.x, y: pos.y, z: pos.z },
+          normal: { x: normal.x, y: normal.y, z: normal.z },
+          blockType: type
+        }
+      });
+    },
+    (type: number) => {
       self.postMessage({ type: 'selection_change', payload: { type } });
-  });
+    }
+  );
 
   networkClient = new NetworkClient(world, player);
 
