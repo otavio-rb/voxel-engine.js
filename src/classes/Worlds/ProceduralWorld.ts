@@ -19,6 +19,7 @@ import { SimplexNoise } from 'three/examples/jsm/Addons.js';
 import WorkerPool from './WorkerPool';
 import Sky from '../Sky';
 import WaterSimulator, { WorldWaterAccess } from '../Physics/WaterSimulator';
+import { blockRegistry } from '../../core/BlockRegistry';
 import { 
   BlockType,
   WorldType, 
@@ -659,10 +660,10 @@ export default class ProceduralWorld extends Group {
     if (!chunk.data.waterLevels) {
       chunk.data.waterLevels = new Uint8Array(chunk.data.blocks.length).fill(0);
     }
-    chunk.data.waterLevels[idx] = blockType === BlockType.Water ? 255 : 0;
+    chunk.data.waterLevels[idx] = blockRegistry.isFluid(blockType) ? 255 : 0;
 
-    // Se colocou água ou removeu bloco adjacente à água, acorda chunks para simulação
-    if (blockType === BlockType.Water) {
+    // Se colocou fluido ou removeu bloco adjacente a fluido, acorda chunks para simulação
+    if (blockRegistry.isFluid(blockType)) {
       this.activeWaterChunks.add(key);
       if (lx === 0)     this.activeWaterChunks.add(this.chunkKey(bx - 1, by, bz));
       if (lx === s - 1) this.activeWaterChunks.add(this.chunkKey(bx + 1, by, bz));
@@ -670,14 +671,14 @@ export default class ProceduralWorld extends Group {
       if (ly === s - 1) this.activeWaterChunks.add(this.chunkKey(bx, by + 1, bz));
       if (lz === 0)     this.activeWaterChunks.add(this.chunkKey(bx, by, bz - 1));
       if (lz === s - 1) this.activeWaterChunks.add(this.chunkKey(bx, by, bz + 1));
-    } else if (blockType === -1 || blockType === BlockType.Empty) {
+    } else if (!blockRegistry.isSolid(blockType)) {
       const neighbors = [
         [bx + 1, by, bz], [bx - 1, by, bz],
         [bx, by + 1, bz], [bx, by - 1, bz],
         [bx, by, bz + 1], [bx, by, bz - 1]
       ];
       for (const [nx, ny, nz] of neighbors) {
-        if (this.getBlock(nx, ny, nz) === BlockType.Water) {
+        if (blockRegistry.isFluid(this.getBlock(nx, ny, nz))) {
           this.activeWaterChunks.add(this.keyForBlock(nx, ny, nz));
           this.activeWaterChunks.add(key);
           break;
@@ -1083,8 +1084,7 @@ export default class ProceduralWorld extends Group {
   private isBorderSolid(border: Int8Array | undefined): boolean {
     if (!border) return false; // neighbour not loaded = unknown, treat as open
     for (let i = 0; i < border.length; i++) {
-      const b = border[i];
-      if (b < 0 || b === BlockType.Water || b === BlockType.Empty) return false;
+      if (!blockRegistry.isOpaque(border[i])) return false;
     }
     return true;
   }
