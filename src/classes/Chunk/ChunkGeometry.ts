@@ -46,6 +46,62 @@ export default class ChunkGeometry {
     return -1;
   }
 
+  private getNeighbourWaterLevel(
+      wx: number, wy: number, wz: number,
+      waterLevels: Uint8Array | undefined,
+      startX: number, startY: number, startZ: number,
+      size: number
+  ): number {
+    const lx = wx - startX;
+    const ly = wy - startY;
+    const lz = wz - startZ;
+    if (waterLevels && lx >= 0 && lx < size && ly >= 0 && ly < size && lz >= 0 && lz < size) {
+      return waterLevels[ly * size * size + lz * size + lx];
+    }
+    return 0;
+  }
+
+  private getCornerWaterHeight(
+    cx: number, cy: number, cz: number,
+    blocks: Int8Array,
+    waterLevels: Uint8Array | undefined,
+    borders: ChunkBorders,
+    startX: number, startY: number, startZ: number,
+    size: number
+  ): number {
+    let sum = 0;
+    let count = 0;
+
+    const cells = [
+      [cx - 1, cz - 1],
+      [cx,     cz - 1],
+      [cx - 1, cz],
+      [cx,     cz]
+    ];
+
+    for (const [x, z] of cells) {
+      const blockAbove = this.getNeighbourBlock(x, cy + 1, z, blocks, borders, startX, startY, startZ, size);
+      if (blockAbove === BlockType.Water) {
+        return 1.0;
+      }
+
+      const b = this.getNeighbourBlock(x, cy, z, blocks, borders, startX, startY, startZ, size);
+      if (b === BlockType.Water) {
+        let level = 1.0;
+        const lx = x - startX;
+        const ly = cy - startY;
+        const lz = z - startZ;
+        if (waterLevels && lx >= 0 && lx < size && ly >= 0 && ly < size && lz >= 0 && lz < size) {
+          level = waterLevels[ly * size * size + lz * size + lx] / 255.0;
+        }
+        sum += Math.max(0.12, level * 0.90);
+        count++;
+      }
+    }
+
+    return count > 0 ? (sum / count) : 0.88;
+  }
+
   private isSolid(
       nx: number, ny: number, nz: number,
       blocks: Int8Array, borders: ChunkBorders,
@@ -138,11 +194,25 @@ export default class ChunkGeometry {
 
             let visible = false;
             if (type === BlockType.Water) {
-              // Water faces are only visible toward air or unknown chunk borders.
-              // water→solid: culled — the solid already renders its face toward water
-              //              (that solid face is what you see through the transparent water).
-              // water→water: culled — interior of the water volume.
-              if (nType === -1 || nType === BlockType.Empty) visible = true;
+              if (label === 'top') {
+                // Topo da água só é renderizado se o bloco acima não for água
+                if (nType !== BlockType.Water) visible = true;
+              } else if (label === 'bottom') {
+                // Fundo da água só é renderizado se o bloco abaixo for ar
+                if (nType === -1 || nType === BlockType.Empty) visible = true;
+              } else {
+                // Faces laterais da água
+                if (nType === -1 || nType === BlockType.Empty) {
+                  visible = true;
+                } else if (nType === BlockType.Water) {
+                  // Renderiza face lateral se houver desnível entre os blocos adjacentes
+                  const myLvl = chunkData.waterLevels ? chunkData.waterLevels[ly * size * size + lz * size + lx] : 255;
+                  const nLvl = this.getNeighbourWaterLevel(wx, wy, wz, chunkData.waterLevels, startX, startY, startZ, size);
+                  if (myLvl > nLvl + 20) {
+                    visible = true;
+                  }
+                }
+              }
             } else {
               // Solid block faces
               if (nType === -1 || nType === BlockType.Empty) visible = true;
@@ -232,6 +302,29 @@ export default class ChunkGeometry {
               fc[axis] = start[axis] + i + cp[axis];
               fc[u]    = start[u]    + j + cp[u] * h;
               fc[v]    = start[v]    + k + cp[v] * w;
+
+              if (isWater) {
+                const curLx = (axis === 0 ? i : u === 0 ? j : k);
+                const curLy = (axis === 1 ? i : u === 1 ? j : k);
+                const curLz = (axis === 2 ? i : u === 2 ? j : k);
+
+                const wbx = start[0] + curLx;
+                const wby = start[1] + curLy;
+                const wbz = start[2] + curLz;
+
+                if (cp[1] === 1) {
+                  // Canto superior: calcula altura inclinada adaptativa pelo campo escalar
+                  const cornerH = this.getCornerWaterHeight(
+                    wbx + cp[0], wby, wbz + cp[2],
+                    blocks, chunkData.waterLevels, borders,
+                    startX, startY, startZ, size
+                  );
+                  fc[1] = wby + cornerH;
+                } else {
+                  // Base do bloco
+                  fc[1] = wby;
+                }
+              }
 
               tPos.push(fc[0], fc[1], fc[2]);
               tNorm.push(dir[0], dir[1], dir[2]);

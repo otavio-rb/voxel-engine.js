@@ -18,6 +18,7 @@ import {
 import { SimplexNoise } from 'three/examples/jsm/Addons.js';
 import WorkerPool from './WorkerPool';
 import Sky from '../Sky';
+import WaterSimulator, { WorldWaterAccess } from '../Physics/WaterSimulator';
 import { 
   BlockType,
   WorldType, 
@@ -71,6 +72,10 @@ export default class ProceduralWorld extends Group {
   private readonly waterMaterial: ShaderMaterial;
   private wireframeEnabled = false;
   private readonly sky: Sky;
+
+  // ─── Water Simulation (Scalar Field) ──────────────────────────────────────
+  private readonly activeWaterChunks = new Set<string>();
+  private waterTickTimer = 0;
 
   // Hot Cache for collision optimization
   private lastChunk: LoadedChunk | null = null;
@@ -390,6 +395,8 @@ export default class ProceduralWorld extends Group {
     this.rebuildQueue.length = 0;
     this.rebuildSet.clear();
     this.pendingRebuildChunks.clear();
+    this.activeWaterChunks.clear();
+    this.waterTickTimer   = 0;
     this.lastChunk = null;
     this.lastChunkKey = null;
     this.lastPlayerChunkX = Infinity;
@@ -414,7 +421,7 @@ export default class ProceduralWorld extends Group {
     dummy.geometry.dispose();
   }
 
-  tick(): void {
+  tick(delta: number = 16.6667): void {
     [this.opaqueMaterial, this.waterMaterial].forEach(mat => {
         mat.uniforms.uTime.value = this.elapsedTime;
         if (!this.isUnderwater) {
@@ -463,10 +470,17 @@ export default class ProceduralWorld extends Group {
     }
 
     if (!this.isTimePaused) {
-        this.sky.tick(this.camera);
-        this.elapsedTime += 0.016; // Stable, monotonic clock (60 FPS assumed for animations)
+        this.sky.tick(this.camera, delta);
+        this.elapsedTime += delta / 1000;
         // 3. Update Entities
-        this.entityManager.update(16); // ~60fps assumption for now
+        this.entityManager.update(delta);
+
+        // 4. Update Water Scalar Field Physics (~12 ticks/sec)
+        this.waterTickTimer += delta;
+        if (this.waterTickTimer >= 80) {
+            this.waterTickTimer = 0;
+            this.tickWaterPhysics();
+        }
     }
 
     if (this.camera.position.distanceToSquared(this.lastUpdatePos) > 16) {
@@ -638,14 +652,42 @@ export default class ProceduralWorld extends Group {
     const lx = bx - chunk.data.startX;
     const ly = by - chunk.data.startY;
     const lz = bz - chunk.data.startZ;
-    const idx = ly * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
+    const s = this.chunkSize;
+    const idx = ly * s * s + lz * s + lx;
 
     chunk.data.blocks[idx] = blockType;
+    if (!chunk.data.waterLevels) {
+      chunk.data.waterLevels = new Uint8Array(chunk.data.blocks.length).fill(0);
+    }
+    chunk.data.waterLevels[idx] = blockType === BlockType.Water ? 255 : 0;
+
+    // Se colocou água ou removeu bloco adjacente à água, acorda chunks para simulação
+    if (blockType === BlockType.Water) {
+      this.activeWaterChunks.add(key);
+      if (lx === 0)     this.activeWaterChunks.add(this.chunkKey(bx - 1, by, bz));
+      if (lx === s - 1) this.activeWaterChunks.add(this.chunkKey(bx + 1, by, bz));
+      if (ly === 0)     this.activeWaterChunks.add(this.chunkKey(bx, by - 1, bz));
+      if (ly === s - 1) this.activeWaterChunks.add(this.chunkKey(bx, by + 1, bz));
+      if (lz === 0)     this.activeWaterChunks.add(this.chunkKey(bx, by, bz - 1));
+      if (lz === s - 1) this.activeWaterChunks.add(this.chunkKey(bx, by, bz + 1));
+    } else if (blockType === -1 || blockType === BlockType.Empty) {
+      const neighbors = [
+        [bx + 1, by, bz], [bx - 1, by, bz],
+        [bx, by + 1, bz], [bx, by - 1, bz],
+        [bx, by, bz + 1], [bx, by, bz - 1]
+      ];
+      for (const [nx, ny, nz] of neighbors) {
+        if (this.getBlock(nx, ny, nz) === BlockType.Water) {
+          this.activeWaterChunks.add(this.keyForBlock(nx, ny, nz));
+          this.activeWaterChunks.add(key);
+          break;
+        }
+      }
+    }
 
     // ── Immediately update this chunk's own borders so that adjacent
     //    chunk rebuilds (dispatched below) see the correct block
     //    instead of the stale value (fixes the transparent-face race condition).
-    const s = this.chunkSize;
     if (lx === 0         && chunk.borders.negX) chunk.borders.negX[ly * s + lz] = blockType;
     if (lx === s - 1     && chunk.borders.posX) chunk.borders.posX[ly * s + lz] = blockType;
     if (ly === 0         && chunk.borders.negY) chunk.borders.negY[lz * s + lx] = blockType;
@@ -655,6 +697,111 @@ export default class ProceduralWorld extends Group {
 
     this.asyncRebuild(key, chunk);
     this.rebuildAdjacentChunks(bx, by, bz, chunk.data);
+  }
+
+  public getWaterLevel(bx: number, by: number, bz: number): number {
+    const key = this.keyForBlock(bx, by, bz);
+    const chunk = this.loadedChunks.get(key);
+    if (!chunk || !chunk.data.waterLevels) return 0;
+    const lx = bx - chunk.data.startX;
+    const ly = by - chunk.data.startY;
+    const lz = bz - chunk.data.startZ;
+    const s = this.chunkSize;
+    if (lx < 0 || lx >= s || ly < 0 || ly >= s || lz < 0 || lz >= s) return 0;
+    return chunk.data.waterLevels[ly * s * s + lz * s + lx];
+  }
+
+  public setBlockAndWaterAt(bx: number, by: number, bz: number, type: number, level: number): void {
+    const key = this.keyForBlock(bx, by, bz);
+    const chunk = this.loadedChunks.get(key);
+    if (!chunk) return;
+    const lx = bx - chunk.data.startX;
+    const ly = by - chunk.data.startY;
+    const lz = bz - chunk.data.startZ;
+    const s = this.chunkSize;
+    const idx = ly * s * s + lz * s + lx;
+
+    chunk.data.blocks[idx] = type;
+    if (!chunk.data.waterLevels) {
+      chunk.data.waterLevels = new Uint8Array(chunk.data.blocks.length).fill(0);
+    }
+    chunk.data.waterLevels[idx] = level;
+
+    if (lx === 0         && chunk.borders.negX) chunk.borders.negX[ly * s + lz] = type;
+    if (lx === s - 1     && chunk.borders.posX) chunk.borders.posX[ly * s + lz] = type;
+    if (ly === 0         && chunk.borders.negY) chunk.borders.negY[lz * s + lx] = type;
+    if (ly === s - 1     && chunk.borders.posY) chunk.borders.posY[lz * s + lx] = type;
+    if (lz === 0         && chunk.borders.negZ) chunk.borders.negZ[ly * s + lx] = type;
+    if (lz === s - 1     && chunk.borders.posZ) chunk.borders.posZ[ly * s + lx] = type;
+
+    this.activeWaterChunks.add(key);
+  }
+
+  private tickWaterPhysics(): void {
+    if (this.activeWaterChunks.size === 0) return;
+
+    const waterAccess: WorldWaterAccess = {
+      getBlock: (wx, wy, wz) => this.getBlock(wx, wy, wz),
+      getWaterLevel: (wx, wy, wz) => this.getWaterLevel(wx, wy, wz),
+      setBlockAndWater: (wx, wy, wz, type, level) => this.setBlockAndWaterAt(wx, wy, wz, type, level)
+    };
+
+    const chunksToProcess = Array.from(this.activeWaterChunks);
+
+    for (const key of chunksToProcess) {
+      const chunk = this.loadedChunks.get(key);
+      if (!chunk) {
+        this.activeWaterChunks.delete(key);
+        continue;
+      }
+
+      const result = WaterSimulator.stepChunk(chunk.data, this.chunkSize, waterAccess);
+
+      if (result.hasChanged) {
+        this.asyncRebuild(key, chunk);
+
+        const [sx, sy, sz] = this.decodeKey(key);
+        const s = this.chunkSize;
+        if (result.touchedBorders.negX) {
+          const adjKey = this.chunkKey(sx - s, sy, sz);
+          this.activeWaterChunks.add(adjKey);
+          const adj = this.loadedChunks.get(adjKey);
+          if (adj) this.asyncRebuild(adjKey, adj);
+        }
+        if (result.touchedBorders.posX) {
+          const adjKey = this.chunkKey(sx + s, sy, sz);
+          this.activeWaterChunks.add(adjKey);
+          const adj = this.loadedChunks.get(adjKey);
+          if (adj) this.asyncRebuild(adjKey, adj);
+        }
+        if (result.touchedBorders.negY) {
+          const adjKey = this.chunkKey(sx, sy - s, sz);
+          this.activeWaterChunks.add(adjKey);
+          const adj = this.loadedChunks.get(adjKey);
+          if (adj) this.asyncRebuild(adjKey, adj);
+        }
+        if (result.touchedBorders.posY) {
+          const adjKey = this.chunkKey(sx, sy + s, sz);
+          this.activeWaterChunks.add(adjKey);
+          const adj = this.loadedChunks.get(adjKey);
+          if (adj) this.asyncRebuild(adjKey, adj);
+        }
+        if (result.touchedBorders.negZ) {
+          const adjKey = this.chunkKey(sx, sy, sz - s);
+          this.activeWaterChunks.add(adjKey);
+          const adj = this.loadedChunks.get(adjKey);
+          if (adj) this.asyncRebuild(adjKey, adj);
+        }
+        if (result.touchedBorders.posZ) {
+          const adjKey = this.chunkKey(sx, sy, sz + s);
+          this.activeWaterChunks.add(adjKey);
+          const adj = this.loadedChunks.get(adjKey);
+          if (adj) this.asyncRebuild(adjKey, adj);
+        }
+      } else {
+        this.activeWaterChunks.delete(key);
+      }
+    }
   }
 
   destroyBlock(point: Vector3, normal: Vector3): void {
@@ -802,6 +949,7 @@ export default class ProceduralWorld extends Group {
         startZ: sz, endZ: sz + this.chunkSize,
         worldParams: this.params, neighbourBorderBlocks: this.getNeighbourBorderBlocks(sx, sy, sz),
         existingBlocks: chunk.data.blocks,
+        existingWaterLevels: chunk.data.waterLevels,
         buildMesh: true // Rebuild jobs explicitly request the mesh
       },
       (response) => this.onRebuildReady(response),

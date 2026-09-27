@@ -41,6 +41,7 @@ export abstract class Animal extends Entity {
     }
 
     public update(deltaTime: number): void {
+        const dtScale = deltaTime / (1000 / 60);
         this.stateTimer -= deltaTime;
         
         if (this.state === 'WANDER') {
@@ -58,7 +59,7 @@ export abstract class Animal extends Entity {
             this.applyWander();
         }
 
-        this.applyPhysics();
+        this.applyPhysics(dtScale);
     }
 
     protected abstract animateLegs(): void;

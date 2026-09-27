@@ -13,6 +13,8 @@ export default class PlayerInteraction {
   private readonly center    = new Vector2(0, 0); // screen centre
   private isLocked = false;
   private selectedBlockType: number = 2; // Default to Grass (2)
+  private currentSlotIndex: number = 0;
+  private readonly hotbarTypes = [2, 0, 1, 3, 4, 9, 10, 7, 6]; // Grass, Stone, Dirt, Sand, Snow, Wood, Leaves, Coal, Water
   private isBreaking = false;
   private breakTimer = 0;
 
@@ -26,14 +28,36 @@ export default class PlayerInteraction {
     this.raycaster.far = REACH;
   }
 
+  public selectSlot(idx: number): void {
+    if (idx < 0 || idx >= this.hotbarTypes.length) return;
+    this.currentSlotIndex = idx;
+    const newType = this.hotbarTypes[idx] ?? 2;
+    if (newType !== this.selectedBlockType) {
+      this.selectedBlockType = newType;
+      if (this.onSelectionChange) this.onSelectionChange(newType);
+    }
+  }
+
+  public setSelectedBlockType(type: number): void {
+    const idx = this.hotbarTypes.indexOf(type);
+    if (idx !== -1) {
+      this.currentSlotIndex = idx;
+    }
+    if (type !== this.selectedBlockType) {
+      this.selectedBlockType = type;
+      if (this.onSelectionChange) this.onSelectionChange(type);
+    }
+  }
+
+  public onWheel(direction: number): void {
+    let newIdx = (this.currentSlotIndex + direction) % this.hotbarTypes.length;
+    if (newIdx < 0) newIdx += this.hotbarTypes.length;
+    this.selectSlot(newIdx);
+  }
+
   public onKeyDown(key: string): void {
     if (key >= '1' && key <= '9') {
-      const types = [2, 0, 1, 3, 4, 9, 10, 7, 8]; // Grass, Stone, Dirt, Sand, Snow, Wood, Leaves, Coal, Iron
-      const newType = types[parseInt(key) - 1] ?? 2;
-      if (newType !== this.selectedBlockType) {
-        this.selectedBlockType = newType;
-        if (this.onSelectionChange) this.onSelectionChange(newType);
-      }
+      this.selectSlot(parseInt(key) - 1);
     }
   }
 
