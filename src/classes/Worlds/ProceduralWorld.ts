@@ -32,11 +32,8 @@ import {
 } from '../../types';
 import RNG from '../../utils/rng';
 import { EntityManager } from '../Entities/EntityManager';
-import { Animal } from '../Entities/Animal';
-import { Sheep } from '../Entities/Sheep';
-import { Cow } from '../Entities/Cow';
-import { Pig } from '../Entities/Pig';
-import { Chicken } from '../Entities/Chicken';
+import { entityRegistry } from '../../core/entities/EntityRegistry';
+import '../Entities'; // garante que entidades padrão estejam registradas
 
 interface LoadedChunk {
   /** Block data kept in memory so destroyed blocks can be applied and the mesh rebuilt. */
@@ -577,22 +574,16 @@ export default class ProceduralWorld extends Group {
                   const idx = ly * this.chunkSize * this.chunkSize + lz * this.chunkSize + lx;
                   const block = chunk.data.blocks[idx];
                   
-                  if (block !== -1 && block !== 5 && block !== 6) { // solid ground
-                    const rand = Math.random();
-                    let entity: Animal;
-                    
-                    if (rand < 0.25) {
-                        entity = new Sheep(this);
-                    } else if (rand < 0.50) {
-                        entity = new Cow(this);
-                    } else if (rand < 0.75) {
-                        entity = new Pig(this);
-                    } else {
-                        entity = new Chicken(this);
+                  if (blockRegistry.isSolid(block)) {
+                    const types = entityRegistry.getAvailableTypes();
+                    if (types.length > 0) {
+                      const randType = types[Math.floor(Math.random() * types.length)];
+                      const entity = entityRegistry.create(randType, this, sx + lx + 0.5, sy + ly + 1.1, sz + lz + 0.5);
+                      if (entity) {
+                        entity.position.set(sx + lx + 0.5, sy + ly + 1.1, sz + lz + 0.5);
+                        this.entityManager.add(entity);
+                      }
                     }
-                    
-                    entity.position.set(sx + lx + 0.5, sy + ly + 1.1, sz + lz + 0.5);
-                    this.entityManager.add(entity);
                     return; // one animal per chunk max
                   }
               }
