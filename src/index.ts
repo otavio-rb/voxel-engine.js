@@ -8,6 +8,10 @@ export {
 export { EventEmitter, type EventCallback } from './core/EventEmitter';
 export { BlockRegistry, blockRegistry, type BlockConfig } from './core/BlockRegistry';
 export {
+  GameLoop,
+  type GameLoopOptions
+} from './core/loop/GameLoop';
+export {
   KinematicBody,
   type BoxDimensions,
   type KinematicBodyOptions,

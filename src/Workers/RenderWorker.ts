@@ -5,6 +5,7 @@ import PlayerInteraction from '../classes/PlayerInteraction';
 import NetworkClient from '../classes/Network/NetworkClient';
 import { blockRegistry } from '../core/BlockRegistry';
 import { syncBlockTypes } from '../constants/block-types';
+import { GameLoop } from '../core/loop/GameLoop';
 
 let renderer: WebGLRenderer;
 let scene: Scene;
@@ -74,29 +75,22 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
     self.postMessage({ type: 'world_regen', config });
   };
 
-  let lastTime = performance.now();
-
-  const loop = () => {
-    const now = performance.now();
-    let delta = now - lastTime;
-    lastTime = now;
-
-    // Evita saltos temporais anômalos em minimização de aba ou travamentos
-    if (delta > 100) delta = 100;
-    if (delta <= 0) delta = 16.6667;
-
-    const dtScale = delta / (1000 / 60); // 1.0 a 60 FPS
-
-    if (isStarted) {
+  const gameLoop = new GameLoop({
+    targetTps: 60,
+    onFixedUpdate: (fixedDelta, dtScale) => {
+      if (isStarted) {
         player.update(dtScale);
-        interaction?.update();  // update block hover outline every frame
-        world.tick(delta);
-        networkClient.update(now, delta);
-    }
-    renderer.render(scene, camera);
+        world.tick(fixedDelta);
+        networkClient.update(performance.now(), fixedDelta);
+      }
+    },
+    onRender: (_alpha, _frameDelta) => {
+      if (isStarted) {
+        interaction?.update();
+      }
+      renderer.render(scene, camera);
 
-    // Send stats back to main thread
-    if (isStarted) {
+      if (isStarted) {
         self.postMessage({
           type: 'stats',
           stats: {
@@ -111,12 +105,11 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
             isUnderwater: world.isUnderwater
           }
         });
+      }
     }
+  });
 
-    requestAnimationFrame(loop);
-  };
-
-  requestAnimationFrame(loop);
+  gameLoop.start();
 };
 
 self.onmessage = (e: MessageEvent) => {
