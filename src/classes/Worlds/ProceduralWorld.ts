@@ -43,6 +43,8 @@ interface LoadedChunk {
   /** Individual Three.js meshes for this chunk. */
   opaqueMesh: Mesh | null;
   waterMesh: Mesh | null;
+  hasAnimated?: boolean;
+  animationStartTime?: number;
 }
 
 export default class ProceduralWorld extends Group {
@@ -150,17 +152,18 @@ export default class ProceduralWorld extends Group {
           vNormal = normal;
           vColor = color;
           vUv = uv;
-          vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
           vCreationTime = creationTime;
           vAo = ao;
 
           vec3 pos = position;
-          if (pos.y >= 0.0) {
-              float age = uTime - creationTime;
-              float rise = smoothstep(0.0, 1.5, age);
-              pos.y *= rise;
-              pos.y -= (1.0 - rise) * 20.0;
-          }
+
+          // Per-chunk rise animation from below (quadratic ease-out)
+          float age = uTime - creationTime;
+          float riseDuration = 1.0;
+          float riseOffset = clamp(1.0 - (age / riseDuration), 0.0, 1.0);
+          pos.y -= pow(riseOffset, 2.0) * 25.0;
+
+          vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
 
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
@@ -221,18 +224,18 @@ export default class ProceduralWorld extends Group {
           vAo = ao;
           
           vec3 pos = position;
+
+          // Per-chunk rise animation from below (quadratic ease-out)
+          float age = uTime - creationTime;
+          float riseDuration = 1.0;
+          float riseOffset = clamp(1.0 - (age / riseDuration), 0.0, 1.0);
+          pos.y -= pow(riseOffset, 2.0) * 25.0;
+
           vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
           
           // Use world coordinates so waves align across chunk borders
           pos.y += sin(uTime * 2.0 + vWorldPos.x * 0.5) * 0.1;
           pos.y += cos(uTime * 1.5 + vWorldPos.z * 0.5) * 0.1;
-
-          if (position.y >= 0.0) {
-              float age = uTime - creationTime;
-              float rise = smoothstep(0.0, 1.5, age);
-              pos.y *= rise;
-              pos.y -= (1.0 - rise) * 20.0;
-          }
           
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
@@ -494,7 +497,27 @@ export default class ProceduralWorld extends Group {
     while (this.rebuildMeshQueue.length > 0 && (performance.now() - tickStart) < timeLimit) {
       const nextRebuild = this.rebuildMeshQueue.shift();
       if (nextRebuild && this.loadedChunks.has(nextRebuild.chunkKey)) {
-        this.applyChunkData(nextRebuild, this.elapsedTime - 2.0);
+        const chunk = this.loadedChunks.get(nextRebuild.chunkKey)!;
+        let creationTime: number;
+
+        if (!chunk.hasAnimated) {
+          // First time this chunk is receiving a mesh: start the rise animation!
+          chunk.hasAnimated = true;
+          chunk.animationStartTime = this.elapsedTime;
+          creationTime = this.elapsedTime;
+        } else if (
+          chunk.animationStartTime !== undefined &&
+          (this.elapsedTime - chunk.animationStartTime) < 1.0
+        ) {
+          // Still rising (e.g. neighbour border rebuild shortly after spawn):
+          // keep original start time so the chunk continues smoothly without popping
+          creationTime = chunk.animationStartTime;
+        } else {
+          // Chunk is already in place and animated; render immediately without rise
+          creationTime = this.elapsedTime - 10.0;
+        }
+
+        this.applyChunkData(nextRebuild, creationTime);
       }
     }
 
@@ -606,6 +629,10 @@ export default class ProceduralWorld extends Group {
     // Compute bounding sphere immediately so Three.js frustum culling
     // works without lazy per-frame computation on the main thread.
     geometry.computeBoundingSphere();
+    if (geometry.boundingSphere) {
+      // Expand bounding sphere so frustum culling does not clip the chunk while it rises from below
+      geometry.boundingSphere.radius += 30.0;
+    }
 
     const mesh = new Mesh(geometry, material);
     mesh.frustumCulled = true;
@@ -646,6 +673,9 @@ export default class ProceduralWorld extends Group {
     const lz = bz - chunk.data.startZ;
     const s = this.chunkSize;
     const idx = ly * s * s + lz * s + lx;
+
+    chunk.hasAnimated = true;
+    chunk.animationStartTime = -10.0;
 
     chunk.data.blocks[idx] = blockType;
     if (!chunk.data.waterLevels) {
