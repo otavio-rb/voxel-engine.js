@@ -53,8 +53,9 @@ export class VoxelEngine extends EventEmitter {
     this.canvas = options.canvas;
 
     const offscreen = this.canvas.transferControlToOffscreen();
-    const workerUrl = options.workerUrl || new URL('../Workers/RenderWorker.ts', import.meta.url);
-    this.worker = new Worker(workerUrl, { type: 'module' });
+    this.worker = options.workerUrl
+      ? new Worker(options.workerUrl, { type: 'module' })
+      : new Worker(new URL('../Workers/RenderWorker.ts', import.meta.url), { type: 'module' });
 
     this.worker.postMessage(
       {

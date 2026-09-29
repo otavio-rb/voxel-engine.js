@@ -4,6 +4,9 @@ export default defineConfig({
   resolve: {
     extensions: ['.mts', '.ts', '.tsx', '.mjs', '.js', '.jsx', '.json'],
   },
+  worker: {
+    format: 'es',
+  },
   server: {
     hmr: {
       clientPort: 443
