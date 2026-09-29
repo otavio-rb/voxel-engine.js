@@ -80,6 +80,8 @@ export interface ChunkJobData {
   neighbourBorderBlocks: ChunkBorders;
   /** If provided, skip terrain generation and use these blocks directly (async rebuild). */
   existingBlocks?: Int8Array;
+  /** Scalar field water levels (0 to 255) */
+  existingWaterLevels?: Uint8Array;
   /** Whether to construct and return 3D geometry. */
   buildMesh?: boolean;
 }
@@ -104,6 +106,8 @@ export interface ChunkDataResult {
   startZ: number;
   endZ: number;
   blocks: Int8Array;
+  /** Scalar field water levels (0 = empty, 255 = 1.0 full block) */
+  waterLevels: Uint8Array;
 }
 
 /** One-block-wide border slices cached per chunk to avoid O(n) iteration on every rebuild. */

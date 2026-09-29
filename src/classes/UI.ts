@@ -11,6 +11,8 @@ export default class UI {
 
   public onCommand?: (command: string, args: string[]) => void;
   public onToggle?: (isOpen: boolean) => void;
+  public onOpenMenu?: () => void;
+  public onSelectBlock?: (type: number) => void;
 
   private chatTimeout: any;
 
@@ -20,7 +22,20 @@ export default class UI {
     this.inputEl  = document.querySelector<HTMLInputElement>('.chat-input')!;
 
     this.initChat();
+    this.initHotbar();
     this.resetChatTimeout();
+  }
+
+  private initHotbar(): void {
+    const slots = document.querySelectorAll<HTMLElement>('.hotbar-slot');
+    slots.forEach((slot) => {
+      slot.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const blockType = parseInt(slot.getAttribute('data-block') || '2');
+        this.updateSelectedBlock(blockType);
+        this.onSelectBlock?.(blockType);
+      });
+    });
   }
 
   public updateSelectedBlock(type: number): void {
@@ -76,11 +91,7 @@ export default class UI {
     
     // Commands that stay local to main thread
     if (cmd === '/menu') {
-        const menu = document.getElementById('world-menu')!;
-        menu.classList.toggle('hidden');
-        if (!menu.classList.contains('hidden')) {
-            document.exitPointerLock();
-        }
+        this.onOpenMenu?.();
         return;
     }
 
