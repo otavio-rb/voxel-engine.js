@@ -7,7 +7,7 @@ export class LunarWorldGenerator implements WorldGenerator {
   public generate(ctx: ChunkContext): void {
     const globalHeight = 128;
 
-    if (ctx.startY > globalHeight || ctx.endY <= 0) return;
+    if (ctx.startY > globalHeight || ctx.endY <= -512) return;
 
     const surfaceOf = new Int16Array(ctx.size * ctx.size);
 
