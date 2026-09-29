@@ -29,10 +29,12 @@ export default class WorkerPool {
   }
 
   /** Enqueue a chunk generation job. Runs immediately if a worker is free. */
-  dispatch(data: ChunkJobData, callback: JobCallback): void {
+  dispatch(data: ChunkJobData, callback: JobCallback, highPriority: boolean = false): void {
     const worker = this.idle.pop();
     if (worker) {
       this.run(worker, { data, callback });
+    } else if (highPriority) {
+      this.queue.unshift({ data, callback });
     } else {
       this.queue.push({ data, callback });
     }
