@@ -874,8 +874,8 @@ export default class ProceduralWorld extends Group {
     const desired = new Set<string>();
     const radiusSq = this.renderDistance * this.renderDistance;
     
-    // Clamped vertical range for procedural world (ky = 0 to 8, Y = 0 to 144)
-    const minCy = Math.max(0, cy - this.verticalRenderDistance);
+    // Dynamic vertical range around player position (supporting deep underground downwards)
+    const minCy = Math.max(-32, cy - this.verticalRenderDistance);
     const maxCy = Math.min(8, cy + this.verticalRenderDistance);
 
     for (let dx = -this.renderDistance; dx <= this.renderDistance; dx++) {
@@ -887,9 +887,11 @@ export default class ProceduralWorld extends Group {
           desired.add(this.chunkKey((cx + dx) * this.chunkSize, targetCy * this.chunkSize, (cz + dz) * this.chunkSize));
         }
         
-        // B) Surface Pinning Layer (Permanent view of terrain from Y=0 to Y=128, all 8 vertical chunks)
-        for (let baseCy = 0; baseCy <= 7; baseCy++) {
-          desired.add(this.chunkKey((cx + dx) * this.chunkSize, baseCy * this.chunkSize, (cz + dz) * this.chunkSize));
+        // B) Surface Pinning Layer (Permanent view of terrain from Y=0 to Y=128 when near surface)
+        if (cy >= -2) {
+          for (let baseCy = 0; baseCy <= 7; baseCy++) {
+            desired.add(this.chunkKey((cx + dx) * this.chunkSize, baseCy * this.chunkSize, (cz + dz) * this.chunkSize));
+          }
         }
       }
     }
@@ -1224,8 +1226,8 @@ export default class ProceduralWorld extends Group {
     const ky = Math.floor(startY / this.chunkSize);
     const kz = Math.floor(startZ / this.chunkSize);
     
-    // Outside valid world height (0 to 144)
-    if (ky < 0 || ky > 8) return false;
+    // Outside valid world height (-512 to 144)
+    if (ky < -32 || ky > 8) return false;
 
     const dx = kx - this.lastPlayerChunkX;
     const dy = ky - this.lastPlayerChunkY;
@@ -1234,10 +1236,10 @@ export default class ProceduralWorld extends Group {
     // Outside horizontal bounds
     if (dx * dx + dz * dz > (this.renderDistance * margin) ** 2) return false;
     
-    // Check our two rules: Surface Pinning (ky 0..7) or Spherical Distance
-    const isSurfacePined = ky >= 0 && ky <= 7;
-    const isSphericalPined = Math.abs(dy) <= (this.verticalRenderDistance * margin);
+    // Check our two rules: Surface Pinning (ky 0..7 when near surface) or Dynamic Vertical Distance
+    const isSurfacePined = this.lastPlayerChunkY >= -2 && ky >= 0 && ky <= 7;
+    const isVerticalDesired = Math.abs(dy) <= (this.verticalRenderDistance * margin);
     
-    return isSurfacePined || isSphericalPined;
+    return isSurfacePined || isVerticalDesired;
   }
 }
