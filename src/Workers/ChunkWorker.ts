@@ -27,7 +27,16 @@ self.onmessage = (e: MessageEvent<ChunkJobData>): void => {
 
   // If existingBlocks is provided this is a rebuild job — skip terrain generation.
   const chunkDataResult: ChunkDataResult = job.existingBlocks
-    ? { startX: job.startX, endX: job.endX, startY: job.startY, endY: job.endY, startZ: job.startZ, endZ: job.endZ, blocks: job.existingBlocks }
+    ? {
+        startX: job.startX,
+        endX: job.endX,
+        startY: job.startY,
+        endY: job.endY,
+        startZ: job.startZ,
+        endZ: job.endZ,
+        blocks: job.existingBlocks,
+        waterLevels: job.existingWaterLevels ?? new Uint8Array(job.existingBlocks.length).fill(0)
+      }
     : new ChunkData({
         size:        job.size,
         height:      job.height,
@@ -58,6 +67,7 @@ self.onmessage = (e: MessageEvent<ChunkJobData>): void => {
   // Transfer the ArrayBuffers instead of copying them (zero-copy).
   const transferables: ArrayBuffer[] = [
     chunkDataResult.blocks.buffer as ArrayBuffer,
+    chunkDataResult.waterLevels.buffer as ArrayBuffer,
     borders.negX!.buffer as ArrayBuffer,
     borders.posX!.buffer as ArrayBuffer,
     borders.negY!.buffer as ArrayBuffer,

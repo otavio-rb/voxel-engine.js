@@ -3,6 +3,9 @@ import ProceduralWorld from '../classes/Worlds/ProceduralWorld';
 import Player from '../classes/Player';
 import PlayerInteraction from '../classes/PlayerInteraction';
 import NetworkClient from '../classes/Network/NetworkClient';
+import { blockRegistry } from '../core/BlockRegistry';
+import { syncBlockTypes } from '../constants/block-types';
+import { GameLoop } from '../core/loop/GameLoop';
 
 let renderer: WebGLRenderer;
 let scene: Scene;
@@ -26,17 +29,41 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
   scene.add(world);
 
   player = new Player({ camera, world, mode: 'debug' });
-  interaction = new PlayerInteraction(camera, world, (point, normal) => {
+  interaction = new PlayerInteraction(
+    camera,
+    world,
+    (pos, normal, blockType) => {
       if (networkClient) {
-          networkClient.broadcastBlockBreak(point.x, point.y, point.z);
+        networkClient.broadcastBlockBreak(pos.x, pos.y, pos.z);
       }
-  }, (point, normal, type) => {
+      self.postMessage({
+        type: 'event',
+        event: 'block:break',
+        payload: {
+          position: { x: pos.x, y: pos.y, z: pos.z },
+          normal: { x: normal.x, y: normal.y, z: normal.z },
+          blockType
+        }
+      });
+    },
+    (pos, normal, type) => {
       if (networkClient) {
-          networkClient.broadcastBlockPlace(point.x, point.y, point.z, type);
+        networkClient.broadcastBlockPlace(pos.x, pos.y, pos.z, type);
       }
-  }, (type: number) => {
+      self.postMessage({
+        type: 'event',
+        event: 'block:place',
+        payload: {
+          position: { x: pos.x, y: pos.y, z: pos.z },
+          normal: { x: normal.x, y: normal.y, z: normal.z },
+          blockType: type
+        }
+      });
+    },
+    (type: number) => {
       self.postMessage({ type: 'selection_change', payload: { type } });
-  });
+    }
+  );
 
   networkClient = new NetworkClient(world, player);
 
@@ -48,23 +75,22 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
     self.postMessage({ type: 'world_regen', config });
   };
 
-  let lastTime = performance.now();
+  const gameLoop = new GameLoop({
+    targetTps: 60,
+    onFixedUpdate: (fixedDelta, dtScale) => {
+      if (isStarted) {
+        player.update(dtScale);
+        world.tick(fixedDelta);
+        networkClient.update(performance.now(), fixedDelta);
+      }
+    },
+    onRender: (_alpha, _frameDelta) => {
+      if (isStarted) {
+        interaction?.update();
+      }
+      renderer.render(scene, camera);
 
-  const loop = () => {
-    const now = performance.now();
-    const delta = now - lastTime;
-    lastTime = now;
-
-    if (isStarted) {
-        player.update();
-        interaction?.update();  // update block hover outline every frame
-        world.tick();
-        networkClient.update(now, delta);
-    }
-    renderer.render(scene, camera);
-
-    // Send stats back to main thread
-    if (isStarted) {
+      if (isStarted) {
         self.postMessage({
           type: 'stats',
           stats: {
@@ -79,12 +105,11 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
             isUnderwater: world.isUnderwater
           }
         });
+      }
     }
+  });
 
-    requestAnimationFrame(loop);
-  };
-
-  requestAnimationFrame(loop);
+  gameLoop.start();
 };
 
 self.onmessage = (e: MessageEvent) => {
@@ -110,6 +135,15 @@ self.onmessage = (e: MessageEvent) => {
   } else if (type === 'lock_state') {
     player?.setLock(payload.isLocked);
     interaction?.setLock(payload.isLocked);
+  } else if (type === 'select_block') {
+    interaction?.setSelectedBlockType(payload.type);
+  } else if (type === 'select_slot') {
+    interaction?.selectSlot(payload.index);
+  } else if (type === 'wheel') {
+    interaction?.onWheel(payload.direction);
+  } else if (type === 'register_block') {
+    blockRegistry.register(payload);
+    syncBlockTypes();
   } else if (type === 'command') {
     handleCommand(payload.command, payload.args);
   }

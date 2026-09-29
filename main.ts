@@ -1,15 +1,25 @@
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 import UI, { UIStats } from './src/classes/UI';
 import { WorldType } from './src/types';
+import { VoxelEngine, EngineStats, BlockBreakEvent, BlockPlaceEvent } from './src/index';
+
+const WORLD_DESCRIPTIONS: Record<string, string> = {
+  [WorldType.Standard]: 'Mundo padrão: Colinas, florestas, praias e cavernas procedurais.',
+  [WorldType.Flat]: 'Mundo plano: Superfície lisa contínua para testes e construções.',
+  [WorldType.Cavern]: 'Mundo cavernoso: Estruturas 3D colossais e cavernas profundas no vazio.',
+  [WorldType.Lunar]: 'Mundo lunar: Solo cinzento com crateras de impacto e baixa gravidade.',
+  [WorldType.Mercury]: 'Mundo de Mercúrio: Solo vulcânico extremo sob forte calor solar.'
+};
 
 class Game {
+  private readonly engine: VoxelEngine;
   private readonly ui: UI;
   private readonly stats: Stats;
-  private readonly worker: Worker;
-  private readonly canvas: HTMLCanvasElement;
 
-  private isLocked = false;
-  private isGenerating = false;
+  private isMenuOpen = true;
+  private selectedWorldType: WorldType = WorldType.Standard;
+  private selectedMode: 'debug' | 'normal' = 'debug';
+  private shadersEnabled = true;
 
   constructor() {
     this.ui = new UI();
@@ -17,137 +27,159 @@ class Game {
     this.stats.dom.id = 'stats-overlay';
     document.body.appendChild(this.stats.dom);
 
-    this.canvas = document.querySelector<HTMLCanvasElement>('#scene')!;
-    const offscreen = this.canvas.transferControlToOffscreen();
+    const canvas = document.querySelector<HTMLCanvasElement>('#scene')!;
+    this.engine = new VoxelEngine({ canvas });
+    this.engine.setInputBlocked(true);
 
-    // Initialize the Render Worker
-    this.worker = new Worker(new URL('./src/Workers/RenderWorker.ts', import.meta.url), { type: 'module' });
-    
-    this.worker.postMessage({
-      type: 'init',
-      payload: {
-        canvas: offscreen,
-        width: window.innerWidth,
-        height: window.innerHeight,
-        pixelRatio: Math.min(window.devicePixelRatio, 2)
-      }
-    }, [offscreen]);
-
-    this.initEvents();
+    this.bindEngineEvents();
+    this.bindUIEvents();
     this.initMenu();
   }
 
-  private initEvents(): void {
-    // Resize
-    window.addEventListener('resize', () => {
-      this.worker.postMessage({
-        type: 'resize',
-        payload: { width: window.innerWidth, height: window.innerHeight }
-      });
+  public openMenu(): void {
+    this.isMenuOpen = true;
+    this.engine.setInputBlocked(true);
+    this.engine.unlockPointer();
+
+    const menuEl = document.getElementById('world-menu');
+    if (!menuEl) return;
+    menuEl.classList.remove('hidden');
+
+    const titleEl = document.getElementById('menu-title');
+    const resumeBtn = document.getElementById('btn-resume');
+    const generateBtnText = document.getElementById('btn-generate-text');
+
+    if (this.engine.hasStarted()) {
+      if (titleEl) titleEl.innerText = 'Jogo Pausado';
+      if (resumeBtn) resumeBtn.style.display = 'block';
+      if (generateBtnText) generateBtnText.innerText = 'Recriar Mundo';
+    } else {
+      if (titleEl) titleEl.innerText = 'Criar Novo Mundo';
+      if (resumeBtn) resumeBtn.style.display = 'none';
+      if (generateBtnText) generateBtnText.innerText = 'Criar Novo Mundo';
+    }
+  }
+
+  public closeMenu(): void {
+    this.isMenuOpen = false;
+    this.engine.setInputBlocked(this.ui.isChatOpen);
+    const menuEl = document.getElementById('world-menu');
+    if (menuEl) {
+      menuEl.classList.add('hidden');
+    }
+  }
+
+  public startGame(): void {
+    this.closeMenu();
+
+    const resumeBtn = document.getElementById('btn-resume');
+    if (resumeBtn) resumeBtn.style.display = 'block';
+
+    this.engine.start({
+      worldType: this.selectedWorldType,
+      mode: this.selectedMode === 'debug' ? 'creative' : 'survival',
+      shaders: this.shadersEnabled
     });
+  }
 
-    // Keyboard
-    document.addEventListener('keydown', e => {
-      if (document.activeElement?.tagName === 'INPUT') return;
-      if (e.key.toLowerCase() === ';') { e.preventDefault(); this.ui.toggleChat(); }
-      this.worker.postMessage({ type: 'keydown', payload: { key: e.key } });
-    });
+  public resumeGame(): void {
+    if (!this.engine.hasStarted()) return;
+    this.closeMenu();
+    this.engine.lockPointer();
+  }
 
-    document.addEventListener('keyup', e => {
-      if (document.activeElement?.tagName === 'INPUT') return;
-      this.worker.postMessage({ type: 'keyup', payload: { key: e.key } });
-    });
+  private bindEngineEvents(): void {
+    this.engine.on<EngineStats>('stats', (stats) => {
+      this.stats.update();
+      this.ui.update(stats as unknown as UIStats);
 
-    // Mouse Movement
-    document.addEventListener('mousemove', e => {
-      if (!this.isLocked) return;
-      this.worker.postMessage({ 
-        type: 'mousemove', 
-        payload: { movementX: e.movementX, movementY: e.movementY } 
-      });
-    });
-
-    // Mouse Click (Raycast)
-    document.addEventListener('mousedown', e => {
-      // Only trigger block interactions on left click (button 0) or right click (button 2)
-      if (e.button !== 0 && e.button !== 2) return;
-
-      const isChatInputFocused = document.activeElement?.classList.contains('chat-input');
-      if (!isChatInputFocused && !this.isLocked) {
-        this.canvas.requestPointerLock();
-      } else if (this.isLocked) {
-        this.worker.postMessage({ type: 'mousedown', payload: { button: e.button } });
-      }
-
-      // Prevent context menu on right click
-      if (e.button === 2) {
-        e.preventDefault();
-      }
-    });
-
-    document.addEventListener('contextmenu', e => {
-      if (this.isLocked) {
-        e.preventDefault();
-      }
-    });
-
-    // Pointer Lock changes
-    document.addEventListener('pointerlockchange', () => {
-      this.isLocked = document.pointerLockElement === this.canvas;
-      this.worker.postMessage({ type: 'lock_state', payload: { isLocked: this.isLocked } });
-      
-      if (!this.isLocked) {
-          const menu = document.getElementById('world-menu')!;
-          if (!this.ui.isChatOpen && !this.isGenerating) {
-             menu.classList.remove('hidden');
-          }
-      } else {
-        this.isGenerating = false;
+      const overlay = document.getElementById('underwater-overlay');
+      if (overlay) {
+        overlay.style.display = stats.isUnderwater ? 'block' : 'none';
       }
     });
 
-    // UI callbacks
-    this.ui.onToggle = (isOpen) => {
-      if (isOpen) {
-        document.exitPointerLock();
-      } else {
-        this.canvas.requestPointerLock();
+    this.engine.on('world_init', (config) => {
+      const type = (config?.type as WorldType) || WorldType.Standard;
+      this.selectedWorldType = type;
+      this.startGame();
+    });
+
+    this.engine.on('world_regen', (config) => {
+      if (config?.type) {
+        this.engine.regenerateWorld(config.type);
       }
-    };
+    });
 
-    this.ui.onCommand = (cmd, args) => {
-      this.worker.postMessage({ type: 'command', payload: { command: cmd, args } });
-    };
+    this.engine.on<number>('selection_change', (type) => {
+      if (typeof type === 'number') {
+        this.ui.updateSelectedBlock(type);
+      }
+    });
 
-    // Receive stats from worker
-    this.worker.onmessage = (e) => {
-      if (e.data.type === 'stats') {
-        this.stats.update();
-        const stats = e.data.stats as UIStats & { isUnderwater: boolean };
-        this.ui.update(stats);
-        
-        // Handle underwater overlay
-        const overlay = document.getElementById('underwater-overlay');
-        if (overlay) {
-            overlay.style.display = stats.isUnderwater ? 'block' : 'none';
+    this.engine.on<BlockBreakEvent>('block:break', ({ position, blockType }) => {
+      // Evento de bloco quebrado disparado pela engine
+    });
+
+    this.engine.on<BlockPlaceEvent>('block:place', ({ position, blockType }) => {
+      // Evento de bloco colocado disparado pela engine
+    });
+
+    this.engine.on<{ isLocked: boolean; wasLocked: boolean }>('lock_change', ({ isLocked, wasLocked }) => {
+      if (wasLocked && !isLocked) {
+        if (!this.ui.isChatOpen && this.engine.hasStarted()) {
+          this.openMenu();
         }
-      } else if (e.data.type === 'world_init') {
-          const type = e.data.config.type;
-          const menuEl = document.getElementById('world-menu')!;
-          menuEl.classList.add('hidden');
-          const resumeBtn = document.getElementById('btn-resume')!;
-          resumeBtn.style.display = 'block';
-          
-          this.isGenerating = true;
-          this.worker.postMessage({ type: 'command', payload: { command: '/start', args: [] } });
-          this.worker.postMessage({ type: 'command', payload: { command: '/regen', args: [type] } });
-          this.canvas.requestPointerLock();
-      } else if (e.data.type === 'world_regen') {
-          const type = e.data.config.type;
-          this.worker.postMessage({ type: 'command', payload: { command: '/regen', args: [type] } });
-      } else if (e.data.type === 'selection_change') {
-          this.ui.updateSelectedBlock(e.data.payload.type);
       }
+    });
+  }
+
+  private bindUIEvents(): void {
+    // Teclado global de atalhos do jogo/menu
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT') return;
+
+      if (e.key === 'Escape') {
+        if (this.isMenuOpen) {
+          if (this.engine.hasStarted()) {
+            e.preventDefault();
+            this.resumeGame();
+          }
+        } else if (!this.ui.isChatOpen && this.engine.hasStarted()) {
+          e.preventDefault();
+          this.openMenu();
+        }
+        return;
+      }
+
+      if (e.key.toLowerCase() === ';') {
+        if (this.isMenuOpen) return;
+        e.preventDefault();
+        this.ui.toggleChat();
+      }
+    });
+
+    this.ui.onToggle = (isOpen: boolean) => {
+      this.engine.setInputBlocked(isOpen || this.isMenuOpen);
+      if (isOpen) {
+        this.engine.unlockPointer();
+      } else {
+        if (!this.isMenuOpen && this.engine.hasStarted()) {
+          this.engine.lockPointer();
+        }
+      }
+    };
+
+    this.ui.onOpenMenu = () => {
+      this.openMenu();
+    };
+
+    this.ui.onSelectBlock = (type: number) => {
+      this.engine.selectBlock(type);
+    };
+
+    this.ui.onCommand = (cmd: string, args: string[]) => {
+      this.engine.sendCommand(cmd, args);
     };
   }
 
@@ -155,37 +187,64 @@ class Game {
     const menuEl = document.getElementById('world-menu')!;
     const generateBtn = document.getElementById('btn-generate')!;
     const resumeBtn = document.getElementById('btn-resume')!;
-    const worldBtns = document.querySelectorAll('.world-btn');
-    
-    let selectedType = WorldType.Standard;
+    const worldBtns = document.querySelectorAll<HTMLButtonElement>('.world-btn');
+    const descBox = document.getElementById('world-desc');
+    const modeBtn = document.getElementById('btn-mode-toggle');
+    const modeText = document.getElementById('mode-text');
+    const modeDesc = document.getElementById('mode-desc');
+    const shadersBtn = document.getElementById('shaders-toggle');
+    const shadersText = document.getElementById('shaders-text');
 
-    worldBtns.forEach(btn => {
+    menuEl.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
+    menuEl.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+
+    worldBtns.forEach((btn) => {
       btn.addEventListener('click', () => {
-        worldBtns.forEach(b => b.classList.remove('active'));
+        worldBtns.forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
-        selectedType = btn.getAttribute('data-type') as WorldType;
+        const type = (btn.getAttribute('data-type') as WorldType) || WorldType.Standard;
+        this.selectedWorldType = type;
+        if (descBox && WORLD_DESCRIPTIONS[type]) {
+          descBox.innerText = WORLD_DESCRIPTIONS[type];
+        }
       });
     });
 
-    generateBtn.addEventListener('click', () => {
-      this.isGenerating = true;
-      menuEl.classList.add('hidden');
-      resumeBtn.style.display = 'block';
-      
-      // Delaying messages slightly to ensure the worker is ready and UI has settled
-      this.worker.postMessage({ type: 'command', payload: { command: '/start', args: [] } });
-      this.worker.postMessage({ type: 'command', payload: { command: '/spawn', args: [] } });
-      this.worker.postMessage({ type: 'command', payload: { command: '/regen', args: [selectedType] } });
+    if (modeBtn && modeText && modeDesc) {
+      modeBtn.addEventListener('click', () => {
+        if (this.selectedMode === 'debug') {
+          this.selectedMode = 'normal';
+          modeText.innerText = 'Sobrevivência';
+          modeDesc.innerText = 'Física e gravidade ativadas.';
+        } else {
+          this.selectedMode = 'debug';
+          modeText.innerText = 'Criativo';
+          modeDesc.innerText = 'Voo livre e sem restrições.';
+        }
 
-      this.canvas.requestPointerLock();
-      
-      // Fallback to reset isGenerating if pointer lock is denied
-      setTimeout(() => { if (!this.isLocked) this.isGenerating = false; }, 1000);
+        if (this.engine.hasStarted()) {
+          this.engine.setGameMode(this.selectedMode === 'debug' ? 'creative' : 'survival');
+        }
+      });
+    }
+
+    if (shadersBtn && shadersText) {
+      shadersBtn.addEventListener('click', () => {
+        this.shadersEnabled = !this.shadersEnabled;
+        shadersText.innerText = this.shadersEnabled ? 'Ativado' : 'Desativado';
+
+        if (this.engine.hasStarted()) {
+          this.engine.toggleShaders(this.shadersEnabled);
+        }
+      });
+    }
+
+    generateBtn.addEventListener('click', () => {
+      this.startGame();
     });
 
     resumeBtn.addEventListener('click', () => {
-      menuEl.classList.add('hidden');
-      this.canvas.requestPointerLock();
+      this.resumeGame();
     });
   }
 }

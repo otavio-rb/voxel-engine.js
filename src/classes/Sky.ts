@@ -199,8 +199,9 @@ export default class Sky extends Group {
     this.add(clouds);
   }
 
-  tick(camera: PerspectiveCamera): void {
-    this.dayTime += 0.005 * this.cycleSpeed;
+  tick(camera: PerspectiveCamera, delta: number = 16.6667): void {
+    const dtScale = delta / (1000 / 60);
+    this.dayTime += 0.005 * this.cycleSpeed * dtScale;
     const angle = this.dayTime % (Math.PI * 2);
     
     // Higher distance (1000 instead of 500) to keep them behind clouds (Y=200)
@@ -248,11 +249,11 @@ export default class Sky extends Group {
     this.ambient.intensity = isDay ? 0.7 : minAmbient;
     this.moonMesh.visible = moonVisible && this.worldType !== WorldType.Mercury;
 
-    this.sunMaterial.uniforms.uTime.value += 0.016;
-    this.moonMaterial.uniforms.uTime.value += 0.016;
-    this.cloudsMaterial.uniforms.uTime.value += 0.016;
+    this.sunMaterial.uniforms.uTime.value += 0.016 * dtScale;
+    this.moonMaterial.uniforms.uTime.value += 0.016 * dtScale;
+    this.cloudsMaterial.uniforms.uTime.value += 0.016 * dtScale;
     
-    this.skyMaterial.uniforms.uTime.value += 0.01;
+    this.skyMaterial.uniforms.uTime.value += 0.01 * dtScale;
     this.skyMaterial.uniforms.uIsSpace.value = starsVisible;
 
     this.skyMaterial.uniforms.uSunHeight.value = sunHeight;
