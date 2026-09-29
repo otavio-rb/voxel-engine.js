@@ -7,7 +7,7 @@ export class FlatWorldGenerator implements WorldGenerator {
   public generate(ctx: ChunkContext): void {
     const height = 20;
 
-    if (ctx.startY > height) return;
+    if (ctx.startY > height || ctx.endY <= -512) return;
 
     for (let x = ctx.startX; x < ctx.endX; x++) {
       for (let z = ctx.startZ; z < ctx.endZ; z++) {

@@ -9,7 +9,7 @@ export class StandardWorldGenerator implements WorldGenerator {
     const seaLevel = Math.floor(globalHeight * 0.25);
 
     if (ctx.startY > globalHeight + 20) return;
-    if (ctx.endY <= 0) return;
+    if (ctx.endY <= -512) return;
 
     // ── Pass 1: Surface height per column ────────────────────────────────────
     const surfaceOf = new Int16Array(ctx.size * ctx.size);

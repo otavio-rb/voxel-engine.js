@@ -7,7 +7,7 @@ export class MercuryWorldGenerator implements WorldGenerator {
   public generate(ctx: ChunkContext): void {
     const globalHeight = 128;
 
-    if (ctx.startY > globalHeight || ctx.endY <= 0) return;
+    if (ctx.startY > globalHeight || ctx.endY <= -512) return;
 
     for (let x = ctx.startX; x < ctx.endX; x++) {
       for (let z = ctx.startZ; z < ctx.endZ; z++) {
