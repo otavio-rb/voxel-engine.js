@@ -489,9 +489,9 @@ export default class ProceduralWorld extends Group {
         this.lastUpdatePos.copy(this.camera.position);
     }
 
-    // Time budget to prevent main thread stutters (max ~8ms per frame for geometry processing)
+    // Time budget to prevent main thread stutters (max ~12ms per frame for geometry processing)
     const tickStart = performance.now();
-    const timeLimit = 8.0;
+    const timeLimit = 12.0;
 
     // 1. Process chunk meshes (from async rebuilds)
     while (this.rebuildMeshQueue.length > 0 && (performance.now() - tickStart) < timeLimit) {
@@ -574,6 +574,7 @@ export default class ProceduralWorld extends Group {
         chunk.waterMesh = this.buildSingleMesh(response.water, uTime, this.waterMaterial);
         this.add(chunk.waterMesh);
     }
+    chunk.hasAnimated = true;
 
     // Try to spawn an animal if this is a newly loaded surface chunk
     if (!response.chunkKey.includes('rebuild')) { // Simple check for first-time load
@@ -873,18 +874,21 @@ export default class ProceduralWorld extends Group {
     const desired = new Set<string>();
     const radiusSq = this.renderDistance * this.renderDistance;
     
+    // Clamped vertical range for procedural world (ky = 0 to 8, Y = 0 to 144)
+    const minCy = Math.max(0, cy - this.verticalRenderDistance);
+    const maxCy = Math.min(8, cy + this.verticalRenderDistance);
+
     for (let dx = -this.renderDistance; dx <= this.renderDistance; dx++) {
       for (let dz = -this.renderDistance; dz <= this.renderDistance; dz++) {
         if (dx * dx + dz * dz > radiusSq) continue;
         
         // A) Deep Dynamic Layer (Dynamic Vertical Load from player point)
-        for (let dy = -this.verticalRenderDistance; dy <= this.verticalRenderDistance; dy++) {
-          desired.add(this.chunkKey((cx + dx) * this.chunkSize, (cy + dy) * this.chunkSize, (cz + dz) * this.chunkSize));
+        for (let targetCy = minCy; targetCy <= maxCy; targetCy++) {
+          desired.add(this.chunkKey((cx + dx) * this.chunkSize, targetCy * this.chunkSize, (cz + dz) * this.chunkSize));
         }
         
-        // B) Surface Pinning Layer (Permanent view of terrain up to max depth)
-        // 4 chunks from Y=0 to Y=128
-        for (let baseCy = 0; baseCy <= 3; baseCy++) {
+        // B) Surface Pinning Layer (Permanent view of terrain from Y=0 to Y=128, all 8 vertical chunks)
+        for (let baseCy = 0; baseCy <= 7; baseCy++) {
           desired.add(this.chunkKey((cx + dx) * this.chunkSize, baseCy * this.chunkSize, (cz + dz) * this.chunkSize));
         }
       }
@@ -975,6 +979,7 @@ export default class ProceduralWorld extends Group {
         buildMesh: true // Rebuild jobs explicitly request the mesh
       },
       (response) => this.onRebuildReady(response),
+      true // highPriority: meshing jobs take precedence over distant terrain generation
     );
   }
 
@@ -1034,7 +1039,7 @@ export default class ProceduralWorld extends Group {
     if (!chunk || this.rebuildSet.has(chunkKey)) return; // Already queued
     
     // If it hasn't been meshed for the first time yet, wait for anticipated neighbors to avoid double-draws
-    if (!chunk.opaqueMesh) {
+    if (!chunk.hasAnimated) {
       const [sx, sy, sz] = this.decodeKey(chunkKey);
       const endX = sx + this.chunkSize;
       const endY = sy + this.chunkSize;
@@ -1162,12 +1167,14 @@ export default class ProceduralWorld extends Group {
 
       if (this.isChunkEnclosed(chunk)) {
         const { startX, endX, startY, endY, startZ, endZ } = chunk.data;
-        // Keep visible if the camera is literally inside this chunk
-        const cameraInside =
-          camX >= startX && camX < endX &&
-          camY >= startY && camY < endY &&
-          camZ >= startZ && camZ < endZ;
-        visible = cameraInside;
+        const s = this.chunkSize;
+        // Keep visible if camera is inside OR directly adjacent (within 1 chunk margin)
+        // so looking down holes or caves never causes chunks underneath to be invisible
+        const cameraNear =
+          camX >= (startX - s) && camX < (endX + s) &&
+          camY >= (startY - s) && camY < (endY + s) &&
+          camZ >= (startZ - s) && camZ < (endZ + s);
+        visible = cameraNear;
       }
 
       if (chunk.opaqueMesh) chunk.opaqueMesh.visible = visible;
@@ -1217,6 +1224,9 @@ export default class ProceduralWorld extends Group {
     const ky = Math.floor(startY / this.chunkSize);
     const kz = Math.floor(startZ / this.chunkSize);
     
+    // Outside valid world height (0 to 144)
+    if (ky < 0 || ky > 8) return false;
+
     const dx = kx - this.lastPlayerChunkX;
     const dy = ky - this.lastPlayerChunkY;
     const dz = kz - this.lastPlayerChunkZ;
@@ -1224,8 +1234,8 @@ export default class ProceduralWorld extends Group {
     // Outside horizontal bounds
     if (dx * dx + dz * dz > (this.renderDistance * margin) ** 2) return false;
     
-    // Check our two rules: Surface Pinning or Spherical Distance
-    const isSurfacePined = ky >= 0 && ky <= 3;
+    // Check our two rules: Surface Pinning (ky 0..7) or Spherical Distance
+    const isSurfacePined = ky >= 0 && ky <= 7;
     const isSphericalPined = Math.abs(dy) <= (this.verticalRenderDistance * margin);
     
     return isSurfacePined || isSphericalPined;

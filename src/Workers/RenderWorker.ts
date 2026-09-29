@@ -25,7 +25,7 @@ const init = (canvas: OffscreenCanvas, width: number, height: number, pixelRatio
   scene = new Scene();
   camera = new PerspectiveCamera(75, width / height, 0.1, 5000);
 
-  world = new ProceduralWorld({ chunkSize: 16, chunkHeight: 32, renderDistance: 8, verticalRenderDistance: 4, camera });
+  world = new ProceduralWorld({ chunkSize: 16, chunkHeight: 32, renderDistance: 8, verticalRenderDistance: 6, camera });
   scene.add(world);
 
   player = new Player({ camera, world, mode: 'debug' });
