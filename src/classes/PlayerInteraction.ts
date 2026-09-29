@@ -1,39 +1,62 @@
-import { Raycaster, Vector2, PerspectiveCamera, Vector3 } from 'three';
+import { PerspectiveCamera, Vector3 } from 'three';
 import ProceduralWorld from './Worlds/ProceduralWorld';
+import { raycastVoxel } from '../core/physics/VoxelRaycaster';
 
-/** Maximum block reach in world units. */
+/** Alcance máximo de interação do jogador em blocos. */
 const REACH = 8;
 
 /**
- * Handles player interactions with the voxel world (block destruction, etc.).
- * Raycasts from the camera centre on left-click while the pointer is locked.
+ * Gerencia a interação do jogador com o mundo voxel (seleção, destruição e colocação de blocos).
+ * Utiliza o algoritmo DDA 3D para raycast em O(passos) no grid, eliminando checagem de malhas poligonais.
  */
 export default class PlayerInteraction {
-  private readonly raycaster = new Raycaster();
-  private readonly center    = new Vector2(0, 0); // screen centre
+  private readonly rayOrigin = new Vector3();
+  private readonly lookDirection = new Vector3();
+
   private isLocked = false;
-  private selectedBlockType: number = 2; // Default to Grass (2)
+  private selectedBlockType: number = 2; // Default para Grass (2)
+  private currentSlotIndex: number = 0;
+  private readonly hotbarTypes = [2, 0, 1, 3, 4, 9, 10, 7, 6]; // Grass, Stone, Dirt, Sand, Snow, Wood, Leaves, Coal, Water
   private isBreaking = false;
-  private breakTimer = 0;
 
   constructor(
     private readonly camera: PerspectiveCamera,
-    private readonly world:  ProceduralWorld,
-    public onBlockDestroyed?: (point: Vector3, normal: Vector3) => void,
-    public onBlockPlaced?: (point: Vector3, normal: Vector3, type: number) => void,
+    private readonly world: ProceduralWorld,
+    public onBlockDestroyed?: (pos: Vector3, normal: Vector3, blockType?: number) => void,
+    public onBlockPlaced?: (pos: Vector3, normal: Vector3, type: number) => void,
     public onSelectionChange?: (type: number) => void
-  ) {
-    this.raycaster.far = REACH;
+  ) {}
+
+  public selectSlot(idx: number): void {
+    if (idx < 0 || idx >= this.hotbarTypes.length) return;
+    this.currentSlotIndex = idx;
+    const newType = this.hotbarTypes[idx] ?? 2;
+    if (newType !== this.selectedBlockType) {
+      this.selectedBlockType = newType;
+      if (this.onSelectionChange) this.onSelectionChange(newType);
+    }
+  }
+
+  public setSelectedBlockType(type: number): void {
+    const idx = this.hotbarTypes.indexOf(type);
+    if (idx !== -1) {
+      this.currentSlotIndex = idx;
+    }
+    if (type !== this.selectedBlockType) {
+      this.selectedBlockType = type;
+      if (this.onSelectionChange) this.onSelectionChange(type);
+    }
+  }
+
+  public onWheel(direction: number): void {
+    let newIdx = (this.currentSlotIndex + direction) % this.hotbarTypes.length;
+    if (newIdx < 0) newIdx += this.hotbarTypes.length;
+    this.selectSlot(newIdx);
   }
 
   public onKeyDown(key: string): void {
     if (key >= '1' && key <= '9') {
-      const types = [2, 0, 1, 3, 4, 9, 10, 7, 8]; // Grass, Stone, Dirt, Sand, Snow, Wood, Leaves, Coal, Iron
-      const newType = types[parseInt(key) - 1] ?? 2;
-      if (newType !== this.selectedBlockType) {
-        this.selectedBlockType = newType;
-        if (this.onSelectionChange) this.onSelectionChange(newType);
-      }
+      this.selectSlot(parseInt(key, 10) - 1);
     }
   }
 
@@ -45,60 +68,56 @@ export default class PlayerInteraction {
     }
   }
 
-  /** Called every frame — updates the hover outline. */
+  /** Atualiza o contorno visual do bloco focado (executado a cada frame). */
   public update(): void {
     if (!this.isLocked) return;
 
-    this.raycaster.setFromCamera(this.center, this.camera);
-    const meshes     = this.world.getChunkMeshes();
-    const intersects = this.raycaster.intersectObjects(meshes, false);
+    this.camera.getWorldDirection(this.lookDirection);
+    this.rayOrigin.copy(this.camera.position);
 
-    if (intersects.length === 0 || !intersects[0].face) {
+    const hit = raycastVoxel(this.world, this.rayOrigin, this.lookDirection, REACH);
+
+    if (!hit) {
       this.world.clearBlockOutline();
       this.isBreaking = false;
       return;
     }
 
-    const hit = intersects[0];
-    const worldNormal = hit.face!.normal.clone().transformDirection(hit.object.matrixWorld);
-    const bx = Math.floor(hit.point.x - worldNormal.x * 0.5);
-    const by = Math.floor(hit.point.y - worldNormal.y * 0.5);
-    const bz = Math.floor(hit.point.z - worldNormal.z * 0.5);
-    
-    this.world.setBlockOutline(bx, by, bz, this.isBreaking);
+    this.world.setBlockOutline(hit.blockPos.x, hit.blockPos.y, hit.blockPos.z, this.isBreaking);
   }
 
+  /** Dispara a ação de clique do mouse (0: quebrar bloco, 2: colocar bloco). */
   public triggerClick(button: number): void {
-    this.raycaster.setFromCamera(this.center, this.camera);
+    this.camera.getWorldDirection(this.lookDirection);
+    this.rayOrigin.copy(this.camera.position);
 
-    const meshes       = this.world.getChunkMeshes();
-    const intersects   = this.raycaster.intersectObjects(meshes, false);
+    const hit = raycastVoxel(this.world, this.rayOrigin, this.lookDirection, REACH);
+    if (!hit) return;
 
-    if (intersects.length === 0) return;
-
-    const hit = intersects[0];
-    if (!hit.face) return;
-
-    // hit.face.normal is in local (mesh) space — transform to world space.
-    const worldNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
-    
     if (button === 0) {
-      // Left click: Destroy
+      // Botão esquerdo: Quebrar bloco
       this.isBreaking = true;
-      this.world.destroyBlock(hit.point, worldNormal);
-      
+      this.world.destroyBlock(hit.point, hit.faceNormal);
+
       if (this.onBlockDestroyed) {
-          this.onBlockDestroyed(hit.point, worldNormal);
+        this.onBlockDestroyed(hit.blockPos, hit.faceNormal, hit.blockType);
       }
-      
-      // Reset isBreaking after a short delay for visual effect
-      setTimeout(() => { this.isBreaking = false; }, 200);
+
+      setTimeout(() => {
+        this.isBreaking = false;
+      }, 200);
     } else if (button === 2) {
-      // Right click: Place
-      this.world.addBlock(hit.point, worldNormal, this.selectedBlockType);
-      
+      // Botão direito: Colocar bloco adjacente à face atingida
+      this.world.addBlock(hit.point, hit.faceNormal, this.selectedBlockType);
+
+      const placePos = new Vector3(
+        hit.blockPos.x + hit.faceNormal.x,
+        hit.blockPos.y + hit.faceNormal.y,
+        hit.blockPos.z + hit.faceNormal.z
+      );
+
       if (this.onBlockPlaced) {
-        this.onBlockPlaced(hit.point, worldNormal, this.selectedBlockType);
+        this.onBlockPlaced(placePos, hit.faceNormal, this.selectedBlockType);
       }
     }
   }

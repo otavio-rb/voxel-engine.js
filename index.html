@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="./style.css" />
-    <title>Voxels</title>
+    <title>Voxel Engine</title>
   </head>
   <body>
     <canvas id="scene"></canvas>
@@ -15,62 +15,85 @@
 
     <div id="interface">
       <div id="hotbar">
-        <div class="hotbar-slot selected" data-block="2"><span class="slot-label">Grass</span></div>
-        <div class="hotbar-slot" data-block="0"><span class="slot-label">Stone</span></div>
-        <div class="hotbar-slot" data-block="1"><span class="slot-label">Dirt</span></div>
-        <div class="hotbar-slot" data-block="3"><span class="slot-label">Sand</span></div>
-        <div class="hotbar-slot" data-block="4"><span class="slot-label">Snow</span></div>
-        <div class="hotbar-slot" data-block="9"><span class="slot-label">Wood</span></div>
-        <div class="hotbar-slot" data-block="10"><span class="slot-label">Leaves</span></div>
-        <div class="hotbar-slot" data-block="7"><span class="slot-label">Coal</span></div>
-        <div class="hotbar-slot" data-block="8"><span class="slot-label">Iron</span></div>
+        <div class="hotbar-slot selected" data-block="2"><span class="slot-key">1</span><div class="slot-icon"></div><span class="slot-label">Grass</span></div>
+        <div class="hotbar-slot" data-block="0"><span class="slot-key">2</span><div class="slot-icon"></div><span class="slot-label">Stone</span></div>
+        <div class="hotbar-slot" data-block="1"><span class="slot-key">3</span><div class="slot-icon"></div><span class="slot-label">Dirt</span></div>
+        <div class="hotbar-slot" data-block="3"><span class="slot-key">4</span><div class="slot-icon"></div><span class="slot-label">Sand</span></div>
+        <div class="hotbar-slot" data-block="4"><span class="slot-key">5</span><div class="slot-icon"></div><span class="slot-label">Snow</span></div>
+        <div class="hotbar-slot" data-block="9"><span class="slot-key">6</span><div class="slot-icon"></div><span class="slot-label">Wood</span></div>
+        <div class="hotbar-slot" data-block="10"><span class="slot-key">7</span><div class="slot-icon"></div><span class="slot-label">Leaves</span></div>
+        <div class="hotbar-slot" data-block="7"><span class="slot-key">8</span><div class="slot-icon"></div><span class="slot-label">Coal</span></div>
+        <div class="hotbar-slot" data-block="6"><span class="slot-key">9</span><div class="slot-icon"></div><span class="slot-label">Água</span></div>
       </div>
       <div id="crosshair"></div>
       <div class="chat-wrapper">
         <div class="chat">
-          <div class="chat-message">Welcome to Voxels! Press ';' to type commands.</div>
+          <div class="chat-message">Bem-vindo ao Voxel Engine! Pressione ';' para digitar comandos.</div>
         </div>
         <div class="chat-input-container">
-          <input type="text" class="chat-input" placeholder="Type a command (/help)..." spellcheck="false" />
+          <input type="text" class="chat-input" placeholder="Digite um comando (/help)..." spellcheck="false" />
         </div>
       </div>
     </div>
 
-    <!-- World Menu Overlay -->
+    <!-- World Menu Overlay (Estilo Clássico Voxel / Minecraft) -->
     <div id="world-menu" class="menu-overlay">
-      <div class="menu-content">
-        <h1>Voxel World</h1>
-        <p>Escolha o rito de criação do seu novo mundo</p>
+      <div class="mc-panel">
         
-        <div class="world-options">
-          <button class="world-btn active" data-type="standard">
-            <span class="btn-title">Padrão</span>
-            <span class="btn-desc">Mundo procedural com biomas e cavernas</span>
+        <h1 id="menu-title" class="mc-title">Criar Novo Mundo</h1>
+
+        <!-- Seletor de Tipo de Mundo -->
+        <div class="mc-section">
+          <div class="mc-section-header">
+            <span class="mc-label">Tipo de Mundo</span>
+          </div>
+          <div class="mc-world-grid">
+            <button type="button" class="mc-btn world-btn active" data-type="standard">Padrão</button>
+            <button type="button" class="mc-btn world-btn" data-type="flat">Plano</button>
+            <button type="button" class="mc-btn world-btn" data-type="cavern">Cavernoso</button>
+            <button type="button" class="mc-btn world-btn" data-type="lunar">Lunar</button>
+            <button type="button" class="mc-btn world-btn" data-type="mercury">Mercúrio</button>
+          </div>
+          <div id="world-desc" class="mc-desc-box">
+            Mundo padrão: Colinas, florestas, praias e cavernas procedurais.
+          </div>
+        </div>
+
+        <!-- Opções de Jogo -->
+        <div class="mc-options-grid">
+          <div class="mc-option-item">
+            <button type="button" id="btn-mode-toggle" class="mc-btn mc-btn-full">
+              Modo: <span id="mode-text">Criativo</span>
+            </button>
+            <div id="mode-desc" class="mc-subdesc">Voo livre e sem restrições.</div>
+          </div>
+
+          <div class="mc-option-item">
+            <button type="button" id="shaders-toggle" class="mc-btn mc-btn-full">
+              Sombras: <span id="shaders-text">Ativado</span>
+            </button>
+            <div class="mc-subdesc">Iluminação dinâmica do sol.</div>
+          </div>
+        </div>
+
+        <!-- Ações Principais -->
+        <div class="mc-actions">
+          <button id="btn-resume" type="button" class="mc-btn mc-btn-action" style="display: none;">
+            Voltar ao Jogo
           </button>
-          <button class="world-btn" data-type="flat">
-            <span class="btn-title">Plano</span>
-            <span class="btn-desc">Superfície lisa para construções livres</span>
-          </button>
-          <button class="world-btn" data-type="cavern">
-            <span class="btn-title">Cavernoso</span>
-            <span class="btn-desc">Estruturas 3D orgânicas e cavernas profundas</span>
-          </button>
-          <button class="world-btn" data-type="lunar">
-            <span class="btn-title">Lunar</span>
-            <span class="btn-desc">Solo cinzento com crateras e baixa gravidade</span>
-          </button>
-          <button class="world-btn" data-type="mercury">
-            <span class="btn-title">Mercúrio</span>
-            <span class="btn-desc">Solo vulcânico próximo ao Sol escaldante</span>
+          <button id="btn-generate" type="button" class="mc-btn mc-btn-action">
+            <span id="btn-generate-text">Criar Novo Mundo</span>
           </button>
         </div>
 
-        <div class="menu-actions">
-          <button id="btn-generate" class="primary-btn">GERAR MUNDO</button>
-          <button id="btn-resume" class="secondary-btn" style="display: none;">VOLTAR AO JOGO</button>
+        <!-- Dicas de Teclado -->
+        <div class="mc-footer-tips">
+          WASD: Mover | Espaço: Pular | 1-9: Blocos | Clique Esq: Quebrar | Clique Dir: Colocar | ESC: Pausa
         </div>
+
       </div>
     </div>
+
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

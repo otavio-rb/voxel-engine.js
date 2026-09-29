@@ -1,6 +1,7 @@
 import HeadlessControls from './HeadlessControls';
 import { PerspectiveCamera, Vector3 } from 'three';
 import ProceduralWorld from './Worlds/ProceduralWorld';
+import { KinematicBody } from '../core/physics/AABBPhysics';
 
 export type PlayerMode = 'normal' | 'debug';
 
@@ -14,14 +15,12 @@ export default class Player {
   public readonly camera: PerspectiveCamera;
   public readonly controls: HeadlessControls;
   public readonly world: ProceduralWorld;
-  private readonly keys: Record<string, boolean> = {};
+  public readonly body: KinematicBody;
 
-  private readonly velocity = new Vector3();
+  private readonly keys: Record<string, boolean> = {};
   private readonly dimensions = { width: 0.5, height: 1.8, eyeHeight: 1.6 };
-  private isGrounded = false;
   private canMove = true;
   private mode: PlayerMode;
-  private gravity = 0.008;
 
   constructor({ camera, world, mode = 'debug' }: PlayerOptions) {
     this.camera = camera;
@@ -30,37 +29,54 @@ export default class Player {
 
     this.controls = new HeadlessControls(camera);
 
-    // Spawn: eyes at 41.6
+    this.body = new KinematicBody({
+      dimensions: { width: this.dimensions.width, height: this.dimensions.height },
+      eyeHeight: this.dimensions.eyeHeight,
+      gravity: 0.008,
+      friction: 0.9
+    });
+
+    // Posição inicial: olhos em 41.6
     this.camera.position.set(2, 41.6, 2);
+    this.body.position.copy(this.camera.position);
+  }
+
+  public get velocity(): Vector3 {
+    return this.body.velocity;
+  }
+
+  public get isGrounded(): boolean {
+    return this.body.isGrounded;
   }
 
   public setMode(mode: PlayerMode): void {
     this.mode = mode;
-    this.velocity.set(0, 0, 0); // Reset velocity to avoid "sliding" into blocks
+    this.body.velocity.set(0, 0, 0);
     if (mode === 'debug') {
-      this.isGrounded = false;
-      this.world.setDebugMode(true);  // disable occlusion culling in creative mode
+      this.body.isGrounded = false;
+      this.world.setDebugMode(true);
     } else {
-      this.world.setDebugMode(false); // enable occlusion culling in survival mode
+      this.world.setDebugMode(false);
     }
   }
 
   public teleport(x: number, y: number, z: number): void {
     this.camera.position.set(x, y, z);
-    this.velocity.set(0, 0, 0);
+    this.body.position.copy(this.camera.position);
+    this.body.velocity.set(0, 0, 0);
   }
 
   public setGravity(value: number): void {
-    this.gravity = value;
+    this.body.gravity = value;
   }
 
   public onKeyDown(key: string): void {
     this.keys[key.toLowerCase()] = true;
-    
-    // Jump
-    if (key.toLowerCase() === ' ' && this.isGrounded && this.mode === 'normal') {
-        this.velocity.y = 0.15;
-        this.isGrounded = false;
+
+    // Pulo
+    if (key === ' ' && this.body.isGrounded && this.mode === 'normal') {
+      this.body.velocity.y = 0.16;
+      this.body.isGrounded = false;
     }
   }
 
@@ -72,59 +88,22 @@ export default class Player {
     this.controls.onMouseMove(movementX, movementY);
   }
 
-  public setLock(isLocked: boolean): void {
-    this.canMove = isLocked;
-    if (isLocked) {
+  public setLock(locked: boolean): void {
+    this.canMove = locked;
+    if (locked) {
       this.controls.lock();
     } else {
       this.controls.unlock();
-      Object.keys(this.keys).forEach(k => this.keys[k] = false);
+      Object.keys(this.keys).forEach((k) => (this.keys[k] = false));
     }
   }
 
-  /**
-   * Checks collision for an AABB centered at x/z of `pos`, 
-   * with `pos.y` being the EYE level.
-   */
-  private isColliding(eyePos: Vector3): boolean {
-    const w = this.dimensions.width / 2;
-    const feetY = eyePos.y - this.dimensions.eyeHeight;
-    const headY = feetY + this.dimensions.height;
-    
-    // We check several points: feet, eyes/head, and middle
-    const points = [
-      // Feet level
-      { x: eyePos.x - w, y: feetY, z: eyePos.z - w },
-      { x: eyePos.x + w, y: feetY, z: eyePos.z - w },
-      { x: eyePos.x - w, y: feetY, z: eyePos.z + w },
-      { x: eyePos.x + w, y: feetY, z: eyePos.z + w },
-      
-      // Top level
-      { x: eyePos.x - w, y: headY, z: eyePos.z - w },
-      { x: eyePos.x + w, y: headY, z: eyePos.z - w },
-      { x: eyePos.x - w, y: headY, z: eyePos.z + w },
-      { x: eyePos.x + w, y: headY, z: eyePos.z + w },
-      
-      // Mid level
-      { x: eyePos.x - w, y: feetY + 0.9, z: eyePos.z - w },
-      { x: eyePos.x + w, y: feetY + 0.9, z: eyePos.z - w },
-      { x: eyePos.x - w, y: feetY + 0.9, z: eyePos.z + w },
-      { x: eyePos.x + w, y: feetY + 0.9, z: eyePos.z + w },
-    ];
-
-    for (const p of points) {
-      if (this.world.isBlockSolid(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private applyPhysics(): void {
+  private applyPhysics(dtScale: number = 1.0): void {
     if (!this.canMove) return;
 
-    // 1. Calculate Intent
-    const moveSpeed = this.mode === 'debug' ? 0.6 : 0.12;
+    // 1. Calcula vetor de intenção
+    const baseSpeed = this.mode === 'debug' ? 0.6 : 0.12;
+    const moveSpeed = baseSpeed * dtScale;
 
     const moveDir = new Vector3();
     if (this.keys['w']) moveDir.z += 1;
@@ -135,87 +114,69 @@ export default class Player {
 
     const forward = new Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
     const right = new Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
-    forward.y = 0; right.y = 0;
-    forward.normalize(); right.normalize();
+    forward.y = 0;
+    right.y = 0;
+    forward.normalize();
+    right.normalize();
 
-    const worldVelocity = forward.multiplyScalar(moveDir.z).add(right.multiplyScalar(moveDir.x)).multiplyScalar(moveSpeed);
+    const worldVelocity = forward
+      .multiplyScalar(moveDir.z)
+      .add(right.multiplyScalar(moveDir.x))
+      .multiplyScalar(moveSpeed);
 
-    this.velocity.x = worldVelocity.x;
-    this.velocity.z = worldVelocity.z;
+    this.body.velocity.x = worldVelocity.x;
+    this.body.velocity.z = worldVelocity.z;
 
-    const footBlock = this.world.getBlock(Math.floor(this.camera.position.x), Math.floor(this.camera.position.y - this.dimensions.eyeHeight + 0.1), Math.floor(this.camera.position.z));
-    const eyeBlock = this.world.getBlock(Math.floor(this.camera.position.x), Math.floor(this.camera.position.y), Math.floor(this.camera.position.z));
+    const footBlock = this.world.getBlock(
+      Math.floor(this.camera.position.x),
+      Math.floor(this.camera.position.y - this.dimensions.eyeHeight + 0.1),
+      Math.floor(this.camera.position.z)
+    );
+    const eyeBlock = this.world.getBlock(
+      Math.floor(this.camera.position.x),
+      Math.floor(this.camera.position.y),
+      Math.floor(this.camera.position.z)
+    );
     const inWater = footBlock === 6 || eyeBlock === 6;
-    
-    // Camera effect based on eye level
+
+    // Efeito visual subaquático
     this.world.setUnderwater(eyeBlock === 6);
 
     if (this.mode === 'debug') {
-        this.velocity.y = 0;
-        if (this.keys[' ']) this.camera.position.y += moveSpeed;
-        if (this.keys['shift'] || this.keys['control']) this.camera.position.y -= moveSpeed;
+      this.body.velocity.y = 0;
+      if (this.keys[' ']) this.camera.position.y += moveSpeed;
+      if (this.keys['shift'] || this.keys['control']) this.camera.position.y -= moveSpeed;
+      this.camera.position.x += this.body.velocity.x;
+      this.camera.position.z += this.body.velocity.z;
+      this.body.position.copy(this.camera.position);
     } else {
-        if (inWater) {
-            this.velocity.y -= this.gravity * 0.2;
-            this.velocity.y = Math.max(this.velocity.y, -0.05);
+      // Dinâmica de água ou gravidade padrão
+      if (inWater) {
+        this.body.velocity.y -= this.body.gravity * 0.2 * dtScale;
+        this.body.velocity.y = Math.max(this.body.velocity.y, -0.05);
 
-            if (this.keys[' ']) {
-                // If eyes are above water but feet are in water, give a jump boost to exit
-                if (eyeBlock !== 6) {
-                    this.velocity.y = 0.15;
-                } else {
-                    this.velocity.y = 0.06;
-                }
-            }
-        } else {
-            this.velocity.y -= this.gravity;
+        if (this.keys[' ']) {
+          this.body.velocity.y = eyeBlock !== 6 ? 0.15 : 0.06;
         }
+      }
+
+      // Sincroniza posição do corpo com a câmera antes da resolução física
+      this.body.position.copy(this.camera.position);
+
+      // Executa passo de física unificada AABB
+      this.body.stepPhysics(this.world, dtScale, !inWater);
+
+      // Sincroniza a câmera com a nova posição dos olhos resolvida
+      this.camera.position.copy(this.body.position);
     }
 
-    // 2. Resolve Collisions Axis-by-Axis
-    if (this.mode === 'debug') {
-        this.camera.position.x += this.velocity.x;
-        this.camera.position.y += this.velocity.y;
-        this.camera.position.z += this.velocity.z;
-    } else {
-        const nextPos = this.camera.position.clone();
-
-        // X
-        nextPos.x += this.velocity.x;
-        if (this.isColliding(nextPos)) {
-            nextPos.x = this.camera.position.x;
-            this.velocity.x = 0;
-        }
-        this.camera.position.x = nextPos.x;
-
-        // Y
-        nextPos.y += this.velocity.y;
-        if (this.isColliding(nextPos)) {
-            if (this.velocity.y < 0) this.isGrounded = true;
-            nextPos.y = this.camera.position.y;
-            this.velocity.y = 0;
-        } else {
-            this.isGrounded = false;
-        }
-        this.camera.position.y = nextPos.y;
-
-        // Z
-        nextPos.z += this.velocity.z;
-        if (this.isColliding(nextPos)) {
-            nextPos.z = this.camera.position.z;
-            this.velocity.z = 0;
-        }
-        this.camera.position.z = nextPos.z;
-    }
-
-    // 3. Fall Reset (only if absurdly far below the world)
+    // Reset de queda abismal
     if (this.camera.position.y < -500) {
-      this.camera.position.set(0, 41.6, 0);
-      this.velocity.set(0, 0, 0);
+      this.teleport(0, 41.6, 0);
     }
   }
 
-  update(): void {
-    this.applyPhysics();
+  public update(dtScale: number = 1.0): void {
+    this.applyPhysics(dtScale);
   }
 }
