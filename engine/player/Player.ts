@@ -166,6 +166,9 @@ export default class Player {
     this.body.position.copy(this.camera.position);
     this.prevPosition.copy(this.body.position);
     this.body.velocity.set(0, 0, 0);
+    // Pushes queued before the teleport (portals, black holes) must not carry over
+    this.externalVelocity.set(0, 0, 0);
+    this.pendingExternal.set(0, 0, 0);
     if (yaw !== undefined || pitch !== undefined) {
       this.controls.setOrientation(yaw ?? 0, pitch ?? 0);
     }
@@ -199,6 +202,12 @@ export default class Player {
         this.sprintRequested = true;
       }
       this.lastForwardTapTick = this.tickCount;
+    }
+
+    if(k === ' ' && !isRepeat){
+      if (this.tickCount - this.lastForwardTapTick <= MOVEMENT.DOUBLE_TAP_TICKS) {
+        this.sprintRequested = true;
+      }
     }
   }
 

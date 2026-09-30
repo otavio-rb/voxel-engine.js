@@ -8,6 +8,7 @@ import { EventEmitter } from '../core/EventEmitter';
 import { BlockPosition, WorldConfig } from '../types';
 import { CommandRegistry } from './CommandRegistry';
 import { registerCoreCommands } from './coreCommands';
+import { PostProcessor } from '../render/PostProcessor';
 
 /**
  * A slice of game logic that runs inside the engine worker.
@@ -51,13 +52,19 @@ export interface BlockInteractionEvent {
  * Everything a plugin can reach inside the engine worker.
  *
  * Local hooks (subscribe with `ctx.on`): `start`, `fixedUpdate` (FixedUpdateEvent),
- * `render` (RenderEvent), `keydown` / `keyup` (key string), `block:break` / `block:place`
+ * `render` (RenderEvent), `predraw` / `postdraw` (right before and after the frame is drawn,
+ * with view effects applied: camera changes made in `predraw` must be undone in `postdraw`),
+ * `shaders` (boolean, after `/shaders on|off`), `keydown` / `keyup` (key string), `block:break` / `block:place`
  * (BlockInteractionEvent).
  */
 export class EngineContext extends EventEmitter {
   /** False until `/start`; the simulation and interaction are paused while false. */
   public started = false;
   public readonly commands = new CommandRegistry();
+  /** Full-screen shader passes applied to every frame; see `ScreenPass`. */
+  public readonly postProcessor: PostProcessor;
+  /** Graphics shaders on/off (`/shaders`). Effects should fall back to simple materials when off. */
+  public shadersEnabled = true;
 
   constructor(
     public readonly renderer: WebGLRenderer,
@@ -71,6 +78,7 @@ export class EngineContext extends EventEmitter {
     public readonly particles: VoxelParticles
   ) {
     super();
+    this.postProcessor = new PostProcessor(renderer);
   }
 
   /** Sends an event to the main thread, where `VoxelEngine` re-emits it under the same name. */
@@ -81,6 +89,14 @@ export class EngineContext extends EventEmitter {
   /** Handles messages sent from the main thread with `VoxelEngine.send(name, payload)`. */
   public onMessage<T = unknown>(name: string, handler: (payload: T) => void): () => void {
     return this.on<T>(`message:${name}`, handler);
+  }
+
+  /** Switches world shaders and post-processing, then notifies plugins through `shaders`. */
+  public setShadersEnabled(enabled: boolean): void {
+    this.shadersEnabled = enabled;
+    this.world.toggleShaders(enabled);
+    this.postProcessor.enabled = enabled;
+    this.emit('shaders', enabled);
   }
 
   public executeCommand(command: string, args: string[] = []): boolean {
@@ -232,8 +248,12 @@ function createContext(options: EngineWorkerOptions, init: InitPayload): EngineC
         interaction.update();
         ctx.emit<RenderEvent>('render', { alpha, frameDeltaMs });
       }
-      if (ctx.started) player.applyViewEffects();
-      renderer.render(scene, camera);
+      if (ctx.started) {
+        player.applyViewEffects();
+        ctx.emit('predraw');
+      }
+      ctx.postProcessor.render(scene, camera);
+      if (ctx.started) ctx.emit('postdraw');
       player.clearViewEffects();
 
       if (ctx.started) {

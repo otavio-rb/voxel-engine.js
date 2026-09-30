@@ -1,6 +1,8 @@
 import { Vector3 } from 'three';
-import { dimensionRegistry, type EnginePlugin, type FixedUpdateEvent } from '@voxel/engine/worker';
+import { dimensionRegistry, type EnginePlugin, type FixedUpdateEvent, type RenderEvent } from '@voxel/engine/worker';
 import { DimensionManager } from '../dimensions/DimensionManager';
+import { PortalWarp } from '../effects/PortalWarp';
+import { applyShaderQuality } from '../effects/ShaderQuality';
 import { chat } from './chat';
 
 /** Local hook fired after `/regen`, so other plugins (e.g. network) can react. */
@@ -16,13 +18,46 @@ export const dimensionsPlugin: EnginePlugin = {
     const { camera, world, player, commands } = ctx;
 
     const dimensionManager = new DimensionManager();
+    const warp = new PortalWarp();
+    ctx.postProcessor.add(warp);
+
     dimensionManager.onChatMessage = (text) => chat(ctx, text);
     dimensionManager.onAbsorptionProgress = (progress, targetDimId, colorHex) => {
       ctx.emitToMain('portal:absorption', { progress, targetDimId, colorHex });
     };
+    dimensionManager.onWarpEffect = (dim) => warp.triggerExit(dim.portalColor ?? 0x9c27b0);
 
+    // Lente gravitacional na fenda mais próxima e a câmera sendo sugada para dentro dela
+    const riftWorldPos = new Vector3();
+    ctx.on<RenderEvent>('render', ({ frameDeltaMs }) => {
+      const { approach, transit, approachColor } = dimensionManager;
+      warp.update(frameDeltaMs / 1000, approach, transit, approachColor);
+    });
+    ctx.on('predraw', () => {
+      warp.applyCamera(camera);
+      let nearest: Vector3 | null = null;
+      let best = Infinity;
+      for (const rift of dimensionManager.rifts) {
+        if (rift.isDisposed) continue;
+        rift.getWorldPosition(riftWorldPos);
+        const d = riftWorldPos.distanceToSquared(camera.position);
+        if (d < best) { best = d; nearest = riftWorldPos.clone(); }
+      }
+      warp.aim(camera, nearest);
+    });
+    ctx.on('postdraw', () => warp.restoreCamera(camera));
+
+    // Shaders off: rifts fall back to plain materials, including ones opened later
+    ctx.on<boolean>('shaders', (enabled) => {
+      for (const rift of dimensionManager.rifts) applyShaderQuality(rift, enabled);
+    });
+
+    let tick = 0;
     ctx.on<FixedUpdateEvent>('fixedUpdate', ({ deltaMs }) => {
       dimensionManager.update(deltaMs / 1000, world, player);
+      if (++tick % 6 === 0) {
+        for (const rift of dimensionManager.rifts) applyShaderQuality(rift, ctx.shadersEnabled);
+      }
     });
 
     commands.register(['/dim', '/dimension'], (args) => {
