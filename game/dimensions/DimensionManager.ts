@@ -9,8 +9,21 @@ export class DimensionManager {
   private currentDimensionId = 'overworld';
   private savedPositions = new Map<string, Vector3>();
   private portalCooldown = 0;
-  private portalContactTimer = 0;
-  private readonly portalTransitDuration = 1.35; // Segundos de sucção até a travessia
+  /** Distância (blocos) em que a fenda começa a puxar e a abrir na tela. */
+  private readonly portalInfluenceRadius = 3.2;
+  /** Distância do centro que conta como ter entrado na fenda. */
+  private readonly portalCoreRadius = 0.75;
+  /** Segundos voando pelo túnel antes de chegar na outra dimensão. */
+  private readonly portalTransitDuration = 1.1;
+  private transitRift: DimensionalRift | null = null;
+  private transitTimer = 0;
+
+  /** 0-1: quão perto o jogador está do núcleo da fenda mais próxima. */
+  public approach = 0;
+  /** 0-1: progresso da travessia do túnel depois de entrar na fenda. */
+  public transit = 0;
+  /** Cor da fenda que está puxando o jogador. */
+  public approachColor = 0x9c27b0;
 
   private activeRifts = new Set<DimensionalRift>();
   private riftsByDimension = new Map<string, DimensionalRift[]>();
@@ -25,6 +38,11 @@ export class DimensionManager {
 
   public get currentDimension(): DimensionDefinition {
     return dimensionRegistry.get(this.currentDimensionId) ?? dimensionRegistry.get('overworld')!;
+  }
+
+  /** Rifts in the current dimension. */
+  public get rifts(): ReadonlySet<DimensionalRift> {
+    return this.activeRifts;
   }
 
   public get currentId(): string {
@@ -154,7 +172,10 @@ export class DimensionManager {
 
     this.currentDimensionId = targetDim.id;
     this.portalCooldown = 3.5;
-    this.portalContactTimer = 0;
+    this.transitRift = null;
+    this.transitTimer = 0;
+    this.approach = 0;
+    this.transit = 0;
     this.onAbsorptionProgress?.(0, '', 0);
 
     this.onChatMessage?.(
@@ -184,10 +205,31 @@ export class DimensionManager {
 
     const playerPos = player.camera.position;
 
+    // ── Dentro da fenda: voa pelo túnel e atravessa ao final ──────────────────
+    if (this.transitRift) {
+      const rift = this.transitRift;
+      this.transitTimer += dtSeconds;
+      this.transit = Math.min(1, this.transitTimer / this.portalTransitDuration);
+      this.approach = 1;
+      rift.suctionIntensity = 1;
+
+      // Segura o corpo parado dentro da fenda enquanto a câmera atravessa
+      player.velocity.set(0, 0, 0);
+      player.externalVelocity.set(0, 0, 0);
+      this.onAbsorptionProgress?.(1, rift.targetDimId, this.approachColor);
+
+      if (this.transit >= 1 || rift.isDisposed) {
+        this.travelTo(rift.targetDimId, world, player, {
+          createReturnPortal: true,
+          useCoordinateScaling: true
+        });
+      }
+      return;
+    }
+
     // Encontra a fenda dimensional mais próxima
     let nearestRift: DimensionalRift | null = null;
     let minRiftDist = Infinity;
-
     for (const rift of this.activeRifts) {
       const d = playerPos.distanceTo(rift.position);
       if (d < minRiftDist) {
@@ -196,46 +238,37 @@ export class DimensionManager {
       }
     }
 
-    // Proximidade para ser aspirado pela fenda
-    const isNearRift = nearestRift !== null && minRiftDist <= 2.2;
+    for (const rift of this.activeRifts) {
+      if (rift !== nearestRift) rift.suctionIntensity = Math.max(0, rift.suctionIntensity - dtSeconds * 2.5);
+    }
 
-    if (isNearRift && nearestRift) {
-      this.portalContactTimer += dtSeconds;
-      const progress = Math.min(1.0, this.portalContactTimer / this.portalTransitDuration);
-
-      const targetDim = nearestRift.targetDimId;
-      const targetDimDef = dimensionRegistry.get(targetDim);
-      const portalColor = targetDimDef?.portalColor ?? 0x9c27b0;
-
-      nearestRift.suctionIntensity = progress;
-
-      // ── Puxão Físico Gravitacional: atrai suavemente o corpo para o centro da fenda ──
-      const toRift = new Vector3().subVectors(nearestRift.position, playerPos);
-      const dist = toRift.length();
-      if (dist > 0.05) {
-        const suctionForce = (1.5 + progress * 5.0) * progress;
-        player.applyForce(toRift.normalize().multiplyScalar(suctionForce * dtSeconds));
+    if (!nearestRift || minRiftDist > this.portalInfluenceRadius) {
+      if (this.approach > 0) {
+        this.approach = Math.max(0, this.approach - dtSeconds * 3.0);
+        this.onAbsorptionProgress?.(this.approach, '', 0);
       }
+      if (nearestRift) nearestRift.suctionIntensity = Math.max(0, nearestRift.suctionIntensity - dtSeconds * 2.5);
+      return;
+    }
 
-      // ── Notifica o overlay de tela cheia (absorção puramente óptica) ─────────────────
-      this.onAbsorptionProgress?.(progress, targetDim, portalColor);
+    // ── Aproximação: a fenda se abre na tela conforme o jogador chega perto ────
+    const span = this.portalInfluenceRadius - this.portalCoreRadius;
+    const closeness = Math.min(1, Math.max(0, (this.portalInfluenceRadius - minRiftDist) / span));
+    this.approach = closeness;
+    this.approachColor = dimensionRegistry.get(nearestRift.targetDimId)?.portalColor ?? 0x9c27b0;
+    nearestRift.suctionIntensity = closeness;
 
-      // Transição dimensional final
-      if (this.portalContactTimer >= this.portalTransitDuration) {
-        this.travelTo(targetDim, world, player, {
-          createReturnPortal: true,
-          useCoordinateScaling: true
-        });
-      }
-    } else {
-      if (this.portalContactTimer > 0) {
-        this.portalContactTimer = Math.max(0, this.portalContactTimer - dtSeconds * 3.0);
-        this.onAbsorptionProgress?.(this.portalContactTimer / this.portalTransitDuration, '', 0);
-      }
+    // Puxão suave, só perto da fenda: o jogador ainda consegue se afastar
+    const toRift = new Vector3().subVectors(nearestRift.position, playerPos);
+    if (minRiftDist > 0.05) {
+      player.applyForce(toRift.normalize().multiplyScalar(closeness * closeness * 0.3 * dtSeconds));
+    }
+    this.onAbsorptionProgress?.(closeness, nearestRift.targetDimId, this.approachColor);
 
-      for (const rift of this.activeRifts) {
-        rift.suctionIntensity = Math.max(0, rift.suctionIntensity - dtSeconds * 2.5);
-      }
+    // Entrou no núcleo: começa a travessia
+    if (minRiftDist <= this.portalCoreRadius) {
+      this.transitRift = nearestRift;
+      this.transitTimer = 0;
     }
   }
 }

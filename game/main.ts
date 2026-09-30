@@ -169,8 +169,8 @@ class Game {
       // Evento de bloco colocado disparado pela engine
     });
 
-    this.engine.on<{ progress: number; targetDimId: string; colorHex: number }>('portal:absorption', ({ progress, colorHex }) => {
-      this.updatePortalAbsorption(progress, colorHex);
+    this.engine.on<{ progress: number; targetDimId: string; colorHex: number }>('portal:absorption', ({ progress }) => {
+      this.updatePortalAbsorption(progress);
     });
 
     this.engine.on<{ isLocked: boolean; wasLocked: boolean }>('lock_change', ({ isLocked, wasLocked }) => {
@@ -538,39 +538,10 @@ class Game {
     }
   }
 
-  private updatePortalAbsorption(progress: number, colorHex: number): void {
-    const overlay = document.getElementById('portal-absorption-overlay');
-    if (!overlay) return;
-
-    if (progress <= 0.01) {
-      overlay.style.opacity = '0';
-      overlay.style.transform = 'scale(1.0) rotate(0deg)';
-      overlay.style.background = 'none';
-      overlay.style.backdropFilter = 'none';
-      this.stopPortalSuctionSound();
-      return;
-    }
-
-    const hex = (colorHex || 0x9c27b0).toString(16).padStart(6, '0');
-    const r = parseInt(hex.slice(0, 2), 16);
-    const g = parseInt(hex.slice(2, 4), 16);
-    const b = parseInt(hex.slice(4, 6), 16);
-
-    const opacity = Math.min(1.0, Math.pow(progress, 1.2) * 1.05);
-    overlay.style.opacity = String(opacity);
-
-    const rot = (progress * 45).toFixed(1);
-    const scale = (1.0 + progress * 0.28).toFixed(2);
-    overlay.style.transform = `scale(${scale}) rotate(${rot}deg)`;
-
-    const coreAlpha = Math.min(0.98, progress * 1.3);
-    const midAlpha = Math.min(0.85, progress * 1.1);
-    const edgeAlpha = Math.min(0.5, progress * 0.8);
-
-    overlay.style.background = `radial-gradient(circle at center, rgba(0, 0, 0, ${coreAlpha}) 0%, rgba(${r}, ${g}, ${b}, ${midAlpha}) ${Math.max(15, 45 - progress * 20)}%, rgba(0, 0, 0, ${midAlpha}) 72%, rgba(${r}, ${g}, ${b}, ${edgeAlpha}) 100%)`;
-    overlay.style.backdropFilter = `blur(${progress * 12}px) contrast(${100 + progress * 120}%) saturate(${100 + progress * 180}%)`;
-
-    this.playPortalSuctionSound(progress);
+  /** The visuals are the PortalWarp shader in the engine worker; here only the sound follows. */
+  private updatePortalAbsorption(progress: number): void {
+    if (progress <= 0.01) this.stopPortalSuctionSound();
+    else this.playPortalSuctionSound(progress);
   }
 
   private bindUIEvents(): void {
