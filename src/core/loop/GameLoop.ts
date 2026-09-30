@@ -73,10 +73,15 @@ export class GameLoop {
 
     this.accumulator += frameTime;
 
-    // Executa passos discretos e constantes de simulação física
-    while (this.accumulator >= this.fixedStepMs) {
+    // Executa passos discretos e constantes de simulação física (máx 2 para evitar spiral of death)
+    let maxSubSteps = 2;
+    while (this.accumulator >= this.fixedStepMs && maxSubSteps > 0) {
       this.onFixedUpdate(this.fixedStepMs, 1.0);
       this.accumulator -= this.fixedStepMs;
+      maxSubSteps--;
+    }
+    if (maxSubSteps === 0) {
+      this.accumulator = 0; // Descarta tempo acumulado excedente para não congelar
     }
 
     // Alpha de interpolação entre o passo anterior e o atual (0.0 a 1.0)

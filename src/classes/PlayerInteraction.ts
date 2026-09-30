@@ -16,7 +16,7 @@ export default class PlayerInteraction {
   private isLocked = false;
   private selectedBlockType: number = 2; // Default para Grass (2)
   private currentSlotIndex: number = 0;
-  private readonly hotbarTypes = [2, 0, 1, 3, 4, 9, 10, 7, 6]; // Grass, Stone, Dirt, Sand, Snow, Wood, Leaves, Coal, Water
+  private readonly hotbarTypes = [2, 0, 1, 3, 4, 9, 10, 7, 6, 13, 12, 11, 14, 15]; // Grass, Stone, Dirt, Sand, Snow, Wood, Leaves, Coal, Water, Lava, Magma, Basalt, Ash, Obsidian
   private isBreaking = false;
 
   constructor(
@@ -57,6 +57,12 @@ export default class PlayerInteraction {
   public onKeyDown(key: string): void {
     if (key >= '1' && key <= '9') {
       this.selectSlot(parseInt(key, 10) - 1);
+    } else if (key === '0') {
+      this.selectSlot(9);
+    } else if (key === '-' || key === '_') {
+      this.selectSlot(10);
+    } else if (key === '=' || key === '+') {
+      this.selectSlot(11);
     }
   }
 

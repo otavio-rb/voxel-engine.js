@@ -96,7 +96,7 @@ export default class UI {
     }
 
     if (cmd === '/help') {
-        this.addChatMessage('Available: /tp, /time, /shaders, /wireframe, /survival, /creative, /spawn, /menu, /regen, /set chunk height');
+        this.addChatMessage('Comandos: /dim [overworld|nether|lunar|mercury|volcanic|astral_void|cavern], /dim list, /rift [dim], /fenda, /volcano, /star, /planet, /celestial clear, /blackhole, /nuke, /raio, /laser, /orbital, /tp, /time | Tecla [R]: Raio');
         return;
     }
 

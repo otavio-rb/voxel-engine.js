@@ -34,6 +34,8 @@ import RNG from '../../utils/rng';
 import { EntityManager } from '../Entities/EntityManager';
 import { entityRegistry } from '../../core/entities/EntityRegistry';
 import '../Entities'; // garante que entidades padrão estejam registradas
+import { DimensionDefinition } from '../../core/dimension/Dimension';
+import { dimensionRegistry } from '../../core/dimension/DimensionRegistry';
 
 interface LoadedChunk {
   /** Block data kept in memory so destroyed blocks can be applied and the mesh rebuilt. */
@@ -96,6 +98,7 @@ export default class ProceduralWorld extends Group {
   private readonly blockEdge:       LineSegments;   // black border edge lines
   private readonly blockEdgeMat:    LineBasicMaterial;
   private readonly entityManager: EntityManager;
+  public activeDimension: DimensionDefinition = dimensionRegistry.get('overworld')!;
 
   readonly params: WorldParams = {
     seed: Math.floor(Math.random() * 100_000),
@@ -174,6 +177,7 @@ export default class ProceduralWorld extends Group {
         uniform float uShadersEnabled;
         uniform float uFogNear;
         uniform float uFogFar;
+        uniform float uTime;
         varying vec3 vNormal;
         varying vec3 vColor;
         varying vec3 vWorldPos;
@@ -191,6 +195,13 @@ export default class ProceduralWorld extends Group {
           float ambient = 0.4;
           
           vec3 lighting = vColor * (diffuse + ambient) * aoMultiplier;
+
+          // Magma emissive heat: if color matches magma block, emits warm fiery glow
+          if (vColor.r > 0.7 && vColor.b < 0.15 && vColor.g > 0.15 && vColor.g < 0.35) {
+            float heatGlow = 0.45 + 0.25 * sin(uTime * 3.0 + vWorldPos.x * 2.0 + vWorldPos.y * 2.0 + vWorldPos.z * 2.0);
+            lighting = max(lighting, vColor * (1.1 + heatGlow));
+          }
+
           float dist = length(vWorldPos - cameraPosition);
           float fog = smoothstep(uFogNear, uFogFar, dist);
           
@@ -233,9 +244,12 @@ export default class ProceduralWorld extends Group {
 
           vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
           
-          // Use world coordinates so waves align across chunk borders
-          pos.y += sin(uTime * 2.0 + vWorldPos.x * 0.5) * 0.1;
-          pos.y += cos(uTime * 1.5 + vWorldPos.z * 0.5) * 0.1;
+          // Use world coordinates so waves align across chunk borders (lava moves slower and thicker)
+          bool isLava = (vColor.r > 0.6 && vColor.b < 0.2);
+          float waveSpeed = isLava ? 0.8 : 2.0;
+          float waveAmp = isLava ? 0.04 : 0.1;
+          pos.y += sin(uTime * waveSpeed + vWorldPos.x * 0.5) * waveAmp;
+          pos.y += cos(uTime * (waveSpeed * 0.75) + vWorldPos.z * 0.5) * waveAmp;
           
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
@@ -244,6 +258,7 @@ export default class ProceduralWorld extends Group {
         uniform vec3 uSkyColor;
         uniform float uFogNear;
         uniform float uFogFar;
+        uniform float uTime;
         varying vec3 vColor;
         varying vec3 vWorldPos;
 
@@ -251,8 +266,18 @@ export default class ProceduralWorld extends Group {
           float dist = length(vWorldPos - cameraPosition);
           float fog = smoothstep(uFogNear, uFogFar, dist);
           
-          vec3 waterBase = mix(vColor, vec3(0.0, 0.4, 0.8), 0.3);
-          gl_FragColor = vec4(mix(waterBase, uSkyColor, fog), 0.7);
+          bool isLava = (vColor.r > 0.6 && vColor.b < 0.2);
+          if (isLava) {
+            float pulse = sin(uTime * 2.5 + vWorldPos.x * 1.5 + vWorldPos.z * 1.5) * 0.5 + 0.5;
+            float slow = cos(uTime * 1.2 - vWorldPos.x * 0.8 + vWorldPos.z * 0.8) * 0.5 + 0.5;
+            vec3 coreHeat = vec3(1.0, 0.75, 0.1);
+            vec3 darkCrust = vec3(0.85, 0.15, 0.02);
+            vec3 lavaBase = mix(darkCrust, coreHeat, pulse * 0.4 + slow * 0.3);
+            gl_FragColor = vec4(mix(lavaBase, uSkyColor, fog * 0.8), 1.0);
+          } else {
+            vec3 waterBase = mix(vColor, vec3(0.0, 0.4, 0.8), 0.3);
+            gl_FragColor = vec4(mix(waterBase, uSkyColor, fog), 0.7);
+          }
         }
       `,
       vertexColors: true,
@@ -382,10 +407,57 @@ export default class ProceduralWorld extends Group {
     return null;
   }
 
+  public switchDimension(dimension: DimensionDefinition, targetPosition?: Vector3): void {
+    this.activeDimension = dimension;
+    this.params.worldType = dimension.generatorId as WorldType;
+    this.sky.setDimension(dimension);
+
+    // Configura névoa e cores atmosféricas da dimensão
+    const fogNear = dimension.atmosphere.fogNear ?? 128.0;
+    const fogFar = dimension.atmosphere.fogFar ?? 256.0;
+    this.opaqueMaterial.uniforms.uFogNear.value = fogNear;
+    this.opaqueMaterial.uniforms.uFogFar.value = fogFar;
+    this.waterMaterial.uniforms.uFogNear.value = fogNear;
+    this.waterMaterial.uniforms.uFogFar.value = fogFar;
+
+    const fogColor = new Color(dimension.atmosphere.fogColor ?? dimension.atmosphere.horizonColor);
+    this.opaqueMaterial.uniforms.uSkyColor.value.copy(fogColor);
+    this.waterMaterial.uniforms.uSkyColor.value.copy(fogColor);
+
+    this.disposeAll();
+    this.loadedChunks.clear();
+    this.pendingChunks.clear();
+    this.meshQueue.length = 0;
+    this.rebuildMeshQueue.length = 0;
+    this.rebuildQueue.length = 0;
+    this.rebuildSet.clear();
+    this.pendingRebuildChunks.clear();
+    this.activeWaterChunks.clear();
+    this.waterTickTimer   = 0;
+    this.lastChunk = null;
+    this.lastChunkKey = null;
+    this.lastPlayerChunkX = Infinity;
+    this.lastPlayerChunkY = Infinity;
+    this.lastPlayerChunkZ = Infinity;
+    this.elapsedTime      = 0;
+
+    if (targetPosition) {
+      this.lastUpdatePos.copy(targetPosition);
+    }
+    this.updateChunks(true);
+  }
+
   public reset(newParams?: Partial<WorldParams>): void {
     if (newParams) {
         if (newParams.seed !== undefined) this.params.seed = newParams.seed;
-        if (newParams.worldType !== undefined) this.params.worldType = newParams.worldType;
+        if (newParams.worldType !== undefined) {
+          this.params.worldType = newParams.worldType;
+          const matchedDim = dimensionRegistry.get(String(newParams.worldType).toLowerCase());
+          if (matchedDim) {
+            this.activeDimension = matchedDim;
+            this.sky.setDimension(matchedDim);
+          }
+        }
         if (newParams.terrain) Object.assign(this.params.terrain, newParams.terrain);
     }
     this.disposeAll();
@@ -404,7 +476,7 @@ export default class ProceduralWorld extends Group {
     this.lastPlayerChunkY = Infinity;
     this.lastPlayerChunkZ = Infinity;
     this.elapsedTime      = 0;
-    this.sky.setWorldType(this.params.worldType);
+    this.sky.setDimension(this.activeDimension);
     this.updateChunks(true);
   }
 
@@ -491,7 +563,7 @@ export default class ProceduralWorld extends Group {
 
     // Time budget to prevent main thread stutters (max ~12ms per frame for geometry processing)
     const tickStart = performance.now();
-    const timeLimit = 12.0;
+    const timeLimit = 6.0;
 
     // 1. Process chunk meshes (from async rebuilds)
     while (this.rebuildMeshQueue.length > 0 && (performance.now() - tickStart) < timeLimit) {
@@ -663,8 +735,7 @@ export default class ProceduralWorld extends Group {
     return meshes;
   }
 
-  /** INTERNAL: Modifies a block and triggers necessary chunk rebuilds. */
-  private setBlockAt(bx: number, by: number, bz: number, blockType: number): void {
+  public setBlockAt(bx: number, by: number, bz: number, blockType: number): void {
     const key = this.keyForBlock(bx, by, bz);
     const chunk = this.loadedChunks.get(key);
     if (!chunk) return;
@@ -835,6 +906,105 @@ export default class ProceduralWorld extends Group {
     this.setBlockAt(bx, by, bz, -1);
   }
 
+  destroyBlockAt(bx: number, by: number, bz: number): boolean {
+    const current = this.getBlock(bx, by, bz);
+    if (!blockRegistry.isSolid(current)) return false;
+    this.setBlockAt(bx, by, bz, -1);
+    return true;
+  }
+
+  destroySphere(center: Vector3, radius: number): Array<{ pos: Vector3; blockType: number }> {
+    const destroyed: Array<{ pos: Vector3; blockType: number }> = [];
+    const minX = Math.floor(center.x - radius);
+    const maxX = Math.ceil(center.x + radius);
+    const minY = Math.max(-64, Math.floor(center.y - radius));
+    const maxY = Math.min(128, Math.ceil(center.y + radius));
+    const minZ = Math.floor(center.z - radius);
+    const maxZ = Math.ceil(center.z + radius);
+
+    const rSq = radius * radius;
+    const modifiedChunks = new Map<string, LoadedChunk>();
+    const adjacentKeys = new Set<string>();
+    const s = this.chunkSize;
+
+    for (let x = minX; x <= maxX; x++) {
+      const dx = (x + 0.5) - center.x;
+      const dxSq = dx * dx;
+      for (let z = minZ; z <= maxZ; z++) {
+        const dz = (z + 0.5) - center.z;
+        const dzSq = dz * dz;
+        if (dxSq + dzSq > rSq) continue;
+
+        for (let y = minY; y <= maxY; y++) {
+          const dy = (y + 0.5) - center.y;
+          if (dxSq + dy * dy + dzSq > rSq) continue;
+
+          const key = this.keyForBlock(x, y, z);
+          let chunk = modifiedChunks.get(key);
+          if (!chunk) {
+            chunk = this.loadedChunks.get(key);
+            if (chunk) modifiedChunks.set(key, chunk);
+          }
+          if (!chunk) continue;
+
+          const lx = x - chunk.data.startX;
+          const ly = y - chunk.data.startY;
+          const lz = z - chunk.data.startZ;
+          const idx = ly * s * s + lz * s + lx;
+          const currentType = chunk.data.blocks[idx];
+
+          if (blockRegistry.isSolid(currentType)) {
+            chunk.data.blocks[idx] = -1;
+            destroyed.push({ pos: new Vector3(x, y, z), blockType: currentType });
+
+            // Atualiza buffers de borda se na borda do chunk
+            if (lx === 0 && chunk.borders.negX) {
+              chunk.borders.negX[ly * s + lz] = -1;
+              adjacentKeys.add(this.chunkKey(chunk.data.startX - s, chunk.data.startY, chunk.data.startZ));
+            }
+            if (lx === s - 1 && chunk.borders.posX) {
+              chunk.borders.posX[ly * s + lz] = -1;
+              adjacentKeys.add(this.chunkKey(chunk.data.startX + s, chunk.data.startY, chunk.data.startZ));
+            }
+            if (ly === 0 && chunk.borders.negY) {
+              chunk.borders.negY[lz * s + lx] = -1;
+              adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY - s, chunk.data.startZ));
+            }
+            if (ly === s - 1 && chunk.borders.posY) {
+              chunk.borders.posY[lz * s + lx] = -1;
+              adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY + s, chunk.data.startZ));
+            }
+            if (lz === 0 && chunk.borders.negZ) {
+              chunk.borders.negZ[ly * s + lx] = -1;
+              adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY, chunk.data.startZ - s));
+            }
+            if (lz === s - 1 && chunk.borders.posZ) {
+              chunk.borders.posZ[ly * s + lx] = -1;
+              adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY, chunk.data.startZ + s));
+            }
+          }
+        }
+      }
+    }
+
+    // Rebuild em lote de todos os chunks afetados
+    for (const [key, chunk] of modifiedChunks) {
+      this.asyncRebuild(key, chunk);
+    }
+    for (const adjKey of adjacentKeys) {
+      if (!modifiedChunks.has(adjKey)) {
+        const adj = this.loadedChunks.get(adjKey);
+        if (adj) this.asyncRebuild(adjKey, adj);
+      }
+    }
+
+    return destroyed;
+  }
+
+  getEntityManager(): EntityManager {
+    return this.entityManager;
+  }
+
   addBlock(point: Vector3, normal: Vector3, blockType: number): void {
     // Offset by +0.5 along normal to get to the empty space next to the hit face
     const bx = Math.floor(point.x + normal.x * 0.5);
@@ -861,7 +1031,7 @@ export default class ProceduralWorld extends Group {
   }
   isBlockSolid(bx: number, by: number, bz: number): boolean { 
       const b = this.getBlock(bx, by, bz);
-      return b !== -1 && b !== 5 && b !== 6; // 5: Empty, 6: Water 
+      return b !== -1 && blockRegistry.isSolid(b);
   }
 
   private updateChunks(force: boolean): void {

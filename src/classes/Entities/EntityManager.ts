@@ -16,8 +16,16 @@ export class EntityManager {
 
     public remove(entity: Entity): void {
         if (this.entities.delete(entity)) {
-            this.container.remove(entity.mesh);
-            entity.dispose();
+            try {
+                this.container.remove(entity.mesh);
+            } catch (e) {
+                console.warn('Erro ao remover mesh da entidade:', e);
+            }
+            try {
+                entity.dispose();
+            } catch (e) {
+                console.warn('Erro ao dispor entidade:', e);
+            }
         }
     }
 
@@ -35,5 +43,9 @@ export class EntityManager {
 
     public get count(): number {
         return this.entities.size;
+    }
+
+    public getEntities(): Entity[] {
+        return Array.from(this.entities);
     }
 }
