@@ -10,6 +10,40 @@ export enum BlockType {
   Iron = 8,
   Wood = 9,
   Leaves = 10,
+  Basalt = 11,
+  Magma = 12,
+  Lava = 13,
+  Ash = 14,
+  Obsidian = 15,
+  Portal = 16,
+
+  // ── Aether Dimension ──────────────────────
+  AetherGrass = 17,
+  AetherDirt = 18,
+  Holystone = 19,
+  MossyHolystone = 20,
+  ColdAercloud = 21,
+  BlueAercloud = 22,
+  GoldenAercloud = 23,
+  ZaniteOre = 24,
+  GravititeOre = 25,
+  AmbrosiumOre = 26,
+  SkyrootLog = 27,
+  SkyrootLeaves = 28,
+  GoldenOakLeaves = 29,
+  CarvedHolystone = 30,
+  SunAltar = 31,
+
+  // ── Overworld Biomes & Trees Expansion ────
+  BirchLog = 32,
+  BirchLeaves = 33,
+  PineLog = 34,
+  PineLeaves = 35,
+  CherryLeaves = 36,
+  JungleLog = 37,
+  JungleLeaves = 38,
+  Cactus = 39,
+  Clay = 40,
 }
 
 export interface BlockDefinition {
@@ -37,12 +71,6 @@ export interface BlockPosition {
   z: number;
 }
 
-export interface BlockPosition {
-  x: number;
-  y: number;
-  z: number;
-}
-
 export interface TerrainParams {
   scale: number;
   magnitude: number;
@@ -57,11 +85,15 @@ export enum WorldType {
   Cavern = 'cavern',
   Lunar = 'lunar',
   Mercury = 'mercury',
+  Volcanic = 'volcanic',
+  Nether = 'nether',
+  AstralVoid = 'astral_void',
+  Aether = 'aether',
 }
 
 export interface WorldParams {
   seed: number;
-  worldType: WorldType;
+  worldType: WorldType | string;
   terrain: TerrainParams;
 }
 
