@@ -60,6 +60,8 @@ export interface ChunkJobData {
   light?: Uint8Array;
   /** Border light slices of the neighbors, laid out like `neighbourBorderBlocks`. */
   neighbourBorderLight?: ChunkLightBorders;
+  /** Rebuild jobs: border water-level slices of the neighbors, laid out like `neighbourBorderBlocks`. */
+  neighbourBorderWaterLevels?: ChunkWaterBorders;
 }
 
 export interface ChunkLightBorders {
@@ -70,6 +72,9 @@ export interface ChunkLightBorders {
   negZ?: Uint8Array;
   posZ?: Uint8Array;
 }
+
+/** Water-level (0-255) border slices, laid out like `ChunkBorders`. */
+export type ChunkWaterBorders = ChunkLightBorders;
 
 /** Typed arrays so buffers can be transferred (zero-copy) from worker → main thread. */
 export interface GeometryData {

@@ -1,11 +1,14 @@
-import { Vector3 } from 'three';
-import { raycastVoxel, type EnginePlugin, type FixedUpdateEvent } from '@voxel/engine/worker';
+import { Color, Vector3 } from 'three';
+import { raycastVoxel, type EnginePlugin, type FixedUpdateEvent, type RenderEvent } from '@voxel/engine/worker';
 import { BlackHoleManager } from '../effects/BlackHoleManager';
 import { ExplosionManager } from '../effects/ExplosionManager';
 import { BeamManager } from '../effects/BeamManager';
 import { CelestialManager } from '../celestial/CelestialManager';
 import { StarType } from '../celestial/Star';
 import { PlanetType } from '../celestial/Planet';
+import { ScreenEffects } from '../effects/ScreenEffects';
+import { applyShaderQuality } from '../effects/ShaderQuality';
+import { Star } from '../celestial/Star';
 import { chat } from './chat';
 
 /** Black holes, explosions, beams and celestial bodies, plus their commands. */
@@ -30,11 +33,107 @@ export const effectsPlugin: EnginePlugin = {
     const celestialManager = new CelestialManager(scene);
     celestialManager.onChatMessage = (text) => chat(ctx, text);
 
+    // ── Shaders off: every effect falls back to plain materials, including ones spawned later ──
+    const effectRoots = () => scene.children.filter(child => child !== world);
+    ctx.on<boolean>('shaders', (enabled) => {
+      for (const root of effectRoots()) applyShaderQuality(root, enabled);
+    });
+
+    // Star occlusion by terrain, sampled a few times per second and smoothed per frame
+    const starVisibility = new Map<Star, { target: number; value: number }>();
+    const toStar = new Vector3();
+    let tick = 0;
+
     ctx.on<FixedUpdateEvent>('fixedUpdate', ({ deltaMs }) => {
       blackHoleManager.update(deltaMs, player, world);
       celestialManager.update(deltaMs, blackHoleManager);
       explosionManager.update(deltaMs);
       beamManager.update(deltaMs);
+
+      if (++tick % 6 !== 0) return;
+      for (const root of effectRoots()) applyShaderQuality(root, ctx.shadersEnabled);
+      if (!ctx.shadersEnabled) return;
+      for (const star of starVisibility.keys()) {
+        if (star.isDisposed) starVisibility.delete(star);
+      }
+      for (const star of celestialManager.getStars()) {
+        if (star.isDisposed) continue;
+        toStar.subVectors(star.position, camera.position);
+        const dist = toStar.length();
+        const hit = raycastVoxel(world, camera.position, toStar.normalize(), Math.min(160, dist - star.radius));
+        const state = starVisibility.get(star) ?? { target: 1, value: hit ? 0 : 1 };
+        state.target = hit ? 0 : 1;
+        starVisibility.set(star, state);
+      }
+    });
+
+    // ── Screen effects: black hole lensing, star glare, explosion shockwaves and flashes ──
+    const screenFx = new ScreenEffects();
+    ctx.postProcessor.add(screenFx);
+    const nukeFlash = new Color(1.0, 0.95, 0.85);
+    const blastFlash = new Color(1.0, 0.78, 0.45);
+    const glareColor = new Color();
+    const forward = new Vector3();
+    const toFx = new Vector3();
+    const center = new Vector3();
+    let frameDt = 0;
+    ctx.on<RenderEvent>('render', ({ frameDeltaMs }) => { frameDt = frameDeltaMs / 1000; });
+
+    /** How much of a flash reaches the eye: facing it and being close make it brighter. */
+    const exposure = (pos: Vector3, falloff: number): number => {
+      toFx.subVectors(pos, camera.position);
+      const dist = toFx.length();
+      const facing = Math.max(0, forward.dot(toFx.divideScalar(Math.max(dist, 1e-3))));
+      return (0.35 + 0.65 * facing) / (1 + (dist / falloff) ** 2);
+    };
+    const byDistance = <T extends { position: Vector3 }>(items: Iterable<T>): T[] =>
+      Array.from(items).sort((a, b) =>
+        a.position.distanceToSquared(camera.position) - b.position.distanceToSquared(camera.position));
+
+    ctx.on('predraw', () => {
+      if (!ctx.shadersEnabled) { screenFx.enabled = false; return; }
+      screenFx.begin(camera, frameDt);
+      camera.getWorldDirection(forward);
+
+      for (const bh of byDistance(blackHoleManager.getBlackHoles())) {
+        if (!bh.isDisposed) screenFx.addLens(bh.position, bh.coreRadius * bh.currentScale);
+      }
+
+      const smoothing = 1 - Math.exp(-frameDt * 8);
+      for (const star of byDistance(celestialManager.getStars())) {
+        if (star.isDisposed) continue;
+        const vis = starVisibility.get(star);
+        if (vis) vis.value += (vis.target - vis.value) * smoothing;
+        const { hot, mid } = star.getColors();
+        glareColor.copy(mid).lerp(hot, 0.5);
+        screenFx.addGlare(star.position, star.radius, glareColor, 1.1 * (vis?.value ?? 1));
+      }
+
+      for (const nuke of byDistance(explosionManager.getNuclearExplosions())) {
+        if (nuke.isDisposed) continue;
+        const t = nuke.elapsed;
+        const r = nuke.craterRadius;
+        center.copy(nuke.position).y += r;
+        const flash = (t < 0.08 ? t / 0.08 : Math.exp(-(t - 0.08) * 2.2)) * exposure(center, r * 12);
+        screenFx.addFlash(nukeFlash, flash);
+
+        const ring = Math.min(t * r * 4.5, r * 16);
+        const strength = t < nuke.duration * 0.6 ? Math.exp(-t * 0.5) : 0;
+        screenFx.addShock(center, ring, r * 0.7, strength, r * 2.2, Math.max(0, 1 - t / nuke.duration));
+        // The blast front sweeping past the player shakes the colors apart
+        const front = camera.position.distanceTo(center) - ring;
+        screenFx.addAberration(Math.exp(-((front / (r * 1.2)) ** 2)) * 0.04 * strength);
+      }
+
+      for (const blast of byDistance(explosionManager.getExplosions())) {
+        if (blast.isDisposed) continue;
+        const p = blast.progress;
+        const fade = 1 - p;
+        screenFx.addFlash(blastFlash, fade ** 3 * Math.min(1, blast.radius / 8) * 0.5 * exposure(blast.position, blast.radius * 8));
+        screenFx.addShock(blast.position, p * blast.radius * 5, blast.radius * 0.5, fade * 0.9, blast.radius * 1.6, fade * 0.7);
+      }
+
+      screenFx.end();
     });
 
     // Atalho: 'r' solta um raio divino onde o jogador estiver olhando

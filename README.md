@@ -68,6 +68,13 @@ export const meuPlugin: EnginePlugin = {
 
 O jogador segue as fórmulas do Minecraft 1.8 ([horizontal](https://www.mcpk.wiki/wiki/Horizontal_Movement_Formulas), [vertical](https://www.mcpk.wiki/wiki/Vertical_Movement_Formulas)): 20 ticks por segundo com a câmera interpolada, momentum com `slipperiness` por bloco, aceleração aérea, sprint-jump, trava de borda no sneak e física de água e lava. Os controles no modo sobrevivência são WASD, Espaço para pular, W duas vezes ou Ctrl para correr, e Shift para agachar. A câmera balança ao andar (view bobbing); `/bobbing off` desliga.
 
+## Iluminação
+
+A engine implementa iluminação voxel no estilo do Minecraft, com luz do céu e luz de blocos em níveis de 0 a 15, propagada por flood fill entre chunks. Ela vem acompanhada de smooth lighting por vértice (combinada com a AO) e de um ciclo dia/noite aplicado pelo shader, sem refazer as malhas. Cada chunk worker calcula a luz do próprio chunk junto com o terreno; a thread principal só costura as bordas e atualiza a luz de forma incremental quando blocos mudam.
+
+- Blocos emitem luz via `luminance` (0 a 1) e filtram via `lightOpacity` (o padrão é derivado de `opaque`/`fluid`).
+- Dimensões controlam `hasSkyLight` e `minLight` na atmosfera.
+
 ## Tecnologias
 
 - TypeScript

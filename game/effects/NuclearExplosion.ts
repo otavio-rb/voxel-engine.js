@@ -430,6 +430,11 @@ export class NuclearExplosion extends Group {
     this.add(this.lightningLines);
   }
 
+  /** Seconds since detonation. */
+  public get elapsed(): number {
+    return this.elapsedTime;
+  }
+
   public update(dtSeconds: number): void {
     if (this.isDisposed) return;
 
