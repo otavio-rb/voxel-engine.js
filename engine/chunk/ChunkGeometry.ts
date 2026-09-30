@@ -1,5 +1,5 @@
 import blockSides from '../blocks/blockSides';
-import { ChunkBorders, ChunkDataResult, ChunkLightBorders } from '../types';
+import { ChunkBorders, ChunkDataResult, ChunkLightBorders, ChunkWaterBorders } from '../types';
 import { blockRegistry } from '../blocks/BlockRegistry';
 
 export default class ChunkGeometry {
@@ -22,15 +22,18 @@ export default class ChunkGeometry {
   /** Packed light of this chunk (sky << 4 | block); undefined means fully sky-lit. */
   private readonly light?: Uint8Array;
   private readonly lightBorders: ChunkLightBorders;
+  private readonly waterBorders: ChunkWaterBorders;
 
   constructor(
     chunkData: ChunkDataResult,
     neighbourBorderBlocks: ChunkBorders = {},
     light?: Uint8Array,
-    neighbourBorderLight: ChunkLightBorders = {}
+    neighbourBorderLight: ChunkLightBorders = {},
+    neighbourBorderWaterLevels: ChunkWaterBorders = {}
   ) {
     this.light = light;
     this.lightBorders = neighbourBorderLight;
+    this.waterBorders = neighbourBorderWaterLevels;
     this.buildGreedy(chunkData, neighbourBorderBlocks);
   }
 
@@ -59,19 +62,24 @@ export default class ChunkGeometry {
     return -1;
   }
 
+  /** Water level (0-255) at a cell, reading neighbor border slices; 255 when unknown. */
   private getNeighbourWaterLevel(
       wx: number, wy: number, wz: number,
       waterLevels: Uint8Array | undefined,
       startX: number, startY: number, startZ: number,
       size: number
   ): number {
-    const lx = wx - startX;
-    const ly = wy - startY;
-    const lz = wz - startZ;
-    if (waterLevels && lx >= 0 && lx < size && ly >= 0 && ly < size && lz >= 0 && lz < size) {
-      return waterLevels[ly * size * size + lz * size + lx];
-    }
-    return 0;
+    const lx = wx - startX, ly = wy - startY, lz = wz - startZ;
+    const inX = lx >= 0 && lx < size, inY = ly >= 0 && ly < size, inZ = lz >= 0 && lz < size;
+    if (inX && inY && inZ) return waterLevels ? waterLevels[ly * size * size + lz * size + lx] : 255;
+    const b = this.waterBorders;
+    if (lx === -1   && inY && inZ && b.negX) return b.negX[ly * size + lz];
+    if (lx === size && inY && inZ && b.posX) return b.posX[ly * size + lz];
+    if (ly === -1   && inX && inZ && b.negY) return b.negY[lz * size + lx];
+    if (ly === size && inX && inZ && b.posY) return b.posY[lz * size + lx];
+    if (lz === -1   && inX && inY && b.negZ) return b.negZ[ly * size + lx];
+    if (lz === size && inX && inY && b.posZ) return b.posZ[ly * size + lx];
+    return 255;
   }
 
   private getCornerWaterHeight(
@@ -100,13 +108,7 @@ export default class ChunkGeometry {
 
       const b = this.getNeighbourBlock(x, cy, z, blocks, borders, startX, startY, startZ, size);
       if (blockRegistry.isFluid(b)) {
-        let level = 1.0;
-        const lx = x - startX;
-        const ly = cy - startY;
-        const lz = z - startZ;
-        if (waterLevels && lx >= 0 && lx < size && ly >= 0 && ly < size && lz >= 0 && lz < size) {
-          level = waterLevels[ly * size * size + lz * size + lx] / 255.0;
-        }
+        const level = this.getNeighbourWaterLevel(x, cy, z, waterLevels, startX, startY, startZ, size) / 255.0;
         sum += Math.max(0.12, level * 0.90);
         count++;
       }

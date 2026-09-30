@@ -473,6 +473,10 @@ export class CelestialManager {
     }
   }
 
+  public getStars(): ReadonlySet<Star> {
+    return this.stars;
+  }
+
   public clear(): void {
     for (const stream of this.plasmaStreams.values()) {
       stream.dispose();

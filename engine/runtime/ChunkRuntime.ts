@@ -72,7 +72,7 @@ function handleJob(job: ChunkJobData): void {
       }).getData();
 
   const geometry = job.buildMesh !== false 
-      ? new ChunkGeometry(chunkDataResult, job.neighbourBorderBlocks, job.light, job.neighbourBorderLight).getData() 
+      ? new ChunkGeometry(chunkDataResult, job.neighbourBorderBlocks, job.light, job.neighbourBorderLight, job.neighbourBorderWaterLevels).getData() 
       : undefined;
       
   const borders = computeBorders(chunkDataResult, job.size);
