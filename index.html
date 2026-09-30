@@ -9,6 +9,8 @@
   <body>
     <canvas id="scene"></canvas>
     <div id="underwater-overlay"></div>
+    <div id="nuclear-flash-overlay"></div>
+    <div id="portal-absorption-overlay"></div>
     <div id="debug">
       <span id="stats"></span>
     </div>
@@ -24,6 +26,20 @@
         <div class="hotbar-slot" data-block="10"><span class="slot-key">7</span><div class="slot-icon"></div><span class="slot-label">Leaves</span></div>
         <div class="hotbar-slot" data-block="7"><span class="slot-key">8</span><div class="slot-icon"></div><span class="slot-label">Coal</span></div>
         <div class="hotbar-slot" data-block="6"><span class="slot-key">9</span><div class="slot-icon"></div><span class="slot-label">Água</span></div>
+        <div class="hotbar-slot" data-block="13"><span class="slot-key">0</span><div class="slot-icon"></div><span class="slot-label">Lava</span></div>
+        <div class="hotbar-slot" data-block="12"><span class="slot-key">-</span><div class="slot-icon"></div><span class="slot-label">Magma</span></div>
+        <div class="hotbar-slot" data-block="11"><span class="slot-key">=</span><div class="slot-icon"></div><span class="slot-label">Basalto</span></div>
+        <div class="hotbar-slot" data-block="14"><div class="slot-icon"></div><span class="slot-label">Cinzas</span></div>
+        <div class="hotbar-slot" data-block="15"><div class="slot-icon"></div><span class="slot-label">Obsidiana</span></div>
+        <div class="hotbar-slot" data-block="17"><div class="slot-icon"></div><span class="slot-label">Aether Grass</span></div>
+        <div class="hotbar-slot" data-block="19"><div class="slot-icon"></div><span class="slot-label">Holystone</span></div>
+        <div class="hotbar-slot" data-block="21"><div class="slot-icon"></div><span class="slot-label">Aercloud</span></div>
+        <div class="hotbar-slot" data-block="25"><div class="slot-icon"></div><span class="slot-label">Gravitite</span></div>
+        <div class="hotbar-slot" data-block="26"><div class="slot-icon"></div><span class="slot-label">Ambrosium</span></div>
+        <div class="hotbar-slot" data-block="32"><div class="slot-icon"></div><span class="slot-label">Bétula</span></div>
+        <div class="hotbar-slot" data-block="34"><div class="slot-icon"></div><span class="slot-label">Pinheiro</span></div>
+        <div class="hotbar-slot" data-block="36"><div class="slot-icon"></div><span class="slot-label">Cerejeira</span></div>
+        <div class="hotbar-slot" data-block="39"><div class="slot-icon"></div><span class="slot-label">Cacto</span></div>
       </div>
       <div id="crosshair"></div>
       <div class="chat-wrapper">
@@ -31,7 +47,7 @@
           <div class="chat-message">Bem-vindo ao Voxel Engine! Pressione ';' para digitar comandos.</div>
         </div>
         <div class="chat-input-container">
-          <input type="text" class="chat-input" placeholder="Digite um comando (/help)..." spellcheck="false" />
+          <input type="text" class="chat-input" placeholder="Digite um comando (/help, /volcano, /dim aether)..." spellcheck="false" />
         </div>
       </div>
     </div>
@@ -49,13 +65,16 @@
           </div>
           <div class="mc-world-grid">
             <button type="button" class="mc-btn world-btn active" data-type="standard">Padrão</button>
+            <button type="button" class="mc-btn world-btn" data-type="aether">The Aether</button>
+            <button type="button" class="mc-btn world-btn" data-type="nether">Nether</button>
+            <button type="button" class="mc-btn world-btn" data-type="volcanic">Vulcânico</button>
             <button type="button" class="mc-btn world-btn" data-type="flat">Plano</button>
             <button type="button" class="mc-btn world-btn" data-type="cavern">Cavernoso</button>
             <button type="button" class="mc-btn world-btn" data-type="lunar">Lunar</button>
             <button type="button" class="mc-btn world-btn" data-type="mercury">Mercúrio</button>
           </div>
           <div id="world-desc" class="mc-desc-box">
-            Mundo padrão: Colinas, florestas, praias e cavernas procedurais.
+            Mundo padrão: Vastas florestas (carvalho, bétula, pinheiros, cerejeiras, selva), desertos com cactos e tundras com biomas em macro-escala.
           </div>
         </div>
 

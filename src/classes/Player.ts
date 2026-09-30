@@ -21,9 +21,12 @@ export default class Player {
   private readonly dimensions = { width: 0.5, height: 1.8, eyeHeight: 1.6 };
   private canMove = true;
   private mode: PlayerMode;
+  public externalVelocity = new Vector3();
+  private shakeIntensity = 0;
 
   constructor({ camera, world, mode = 'debug' }: PlayerOptions) {
     this.camera = camera;
+    this.camera.rotation.order = 'YXZ';
     this.world = world;
     this.mode = mode;
 
@@ -60,14 +63,29 @@ export default class Player {
     }
   }
 
-  public teleport(x: number, y: number, z: number): void {
+  public teleport(x: number, y: number, z: number, yaw?: number, pitch?: number): void {
     this.camera.position.set(x, y, z);
     this.body.position.copy(this.camera.position);
     this.body.velocity.set(0, 0, 0);
+    if (yaw !== undefined || pitch !== undefined) {
+      this.controls.setOrientation(yaw ?? 0, pitch ?? 0);
+    }
   }
 
   public setGravity(value: number): void {
     this.body.gravity = value;
+  }
+
+  public applyForce(force: Vector3): void {
+    if (Number.isFinite(force.x) && Number.isFinite(force.y) && Number.isFinite(force.z)) {
+      this.externalVelocity.add(force);
+    }
+  }
+
+  public addCameraShake(intensity: number): void {
+    if (Number.isFinite(intensity) && intensity > 0) {
+      this.shakeIntensity = Math.min(0.4, this.shakeIntensity + intensity);
+    }
   }
 
   public onKeyDown(key: string): void {
@@ -124,8 +142,8 @@ export default class Player {
       .add(right.multiplyScalar(moveDir.x))
       .multiplyScalar(moveSpeed);
 
-    this.body.velocity.x = worldVelocity.x;
-    this.body.velocity.z = worldVelocity.z;
+    this.body.velocity.x = worldVelocity.x + this.externalVelocity.x;
+    this.body.velocity.z = worldVelocity.z + this.externalVelocity.z;
 
     const footBlock = this.world.getBlock(
       Math.floor(this.camera.position.x),
@@ -144,11 +162,11 @@ export default class Player {
 
     if (this.mode === 'debug') {
       this.body.velocity.y = 0;
-      if (this.keys[' ']) this.camera.position.y += moveSpeed;
-      if (this.keys['shift'] || this.keys['control']) this.camera.position.y -= moveSpeed;
-      this.camera.position.x += this.body.velocity.x;
-      this.camera.position.z += this.body.velocity.z;
-      this.body.position.copy(this.camera.position);
+      if (this.keys[' ']) this.body.position.y += moveSpeed;
+      if (this.keys['shift'] || this.keys['control']) this.body.position.y -= moveSpeed;
+      this.body.position.y += this.externalVelocity.y;
+      this.body.position.x += this.body.velocity.x;
+      this.body.position.z += this.body.velocity.z;
     } else {
       // Dinâmica de água ou gravidade padrão
       if (inWater) {
@@ -160,14 +178,27 @@ export default class Player {
         }
       }
 
-      // Sincroniza posição do corpo com a câmera antes da resolução física
-      this.body.position.copy(this.camera.position);
+      this.body.velocity.y += this.externalVelocity.y;
 
       // Executa passo de física unificada AABB
       this.body.stepPhysics(this.world, dtScale, !inWater);
+    }
 
-      // Sincroniza a câmera com a nova posição dos olhos resolvida
-      this.camera.position.copy(this.body.position);
+    // Sincroniza a câmera estritamente com a posição do corpo
+    this.camera.position.copy(this.body.position);
+
+    // Aplica tremor de câmera apenas no render sem contaminar a física
+    if (this.shakeIntensity > 0.001) {
+      this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
+      this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;
+      this.camera.position.z += (Math.random() - 0.5) * this.shakeIntensity;
+      this.shakeIntensity *= 0.82;
+    }
+
+    // Amortecimento de velocidade externa
+    this.externalVelocity.multiplyScalar(0.90);
+    if (this.externalVelocity.lengthSq() < 0.00001) {
+      this.externalVelocity.set(0, 0, 0);
     }
 
     // Reset de queda abismal

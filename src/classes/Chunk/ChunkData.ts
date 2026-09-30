@@ -59,8 +59,8 @@ export default class ChunkData implements ChunkContext {
     const i = this.idx(x, y, z);
     if (i !== -1) {
       this.blocks[i] = type;
-      // Bloco 6 é água no registro padrão
-      this.waterLevels[i] = type === 6 ? 255 : 0;
+      // Bloco 6 é água, 13 é lava
+      this.waterLevels[i] = (type === 6 || type === 13) ? 255 : 0;
     }
   }
 

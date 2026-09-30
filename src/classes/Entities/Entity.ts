@@ -89,7 +89,22 @@ export abstract class Entity {
   }
 
   public dispose(): void {
-    this.mesh.geometry.dispose();
-    (this.mesh.material as MeshStandardMaterial).dispose();
+    if (this.mesh) {
+      this.mesh.traverse((child) => {
+        if ((child as Mesh).isMesh) {
+          const m = child as Mesh;
+          if (m.geometry) {
+            m.geometry.dispose();
+          }
+          if (m.material) {
+            if (Array.isArray(m.material)) {
+              m.material.forEach((mat) => mat.dispose());
+            } else {
+              m.material.dispose();
+            }
+          }
+        }
+      });
+    }
   }
 }

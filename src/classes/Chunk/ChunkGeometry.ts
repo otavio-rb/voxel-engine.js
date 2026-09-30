@@ -82,12 +82,12 @@ export default class ChunkGeometry {
 
     for (const [x, z] of cells) {
       const blockAbove = this.getNeighbourBlock(x, cy + 1, z, blocks, borders, startX, startY, startZ, size);
-      if (blockAbove === BlockType.Water) {
+      if (blockAbove === BlockType.Water || blockAbove === BlockType.Lava) {
         return 1.0;
       }
 
       const b = this.getNeighbourBlock(x, cy, z, blocks, borders, startX, startY, startZ, size);
-      if (b === BlockType.Water) {
+      if (b === BlockType.Water || b === BlockType.Lava) {
         let level = 1.0;
         const lx = x - startX;
         const ly = cy - startY;
@@ -194,30 +194,30 @@ export default class ChunkGeometry {
             const nType = this.getNeighbourBlock(wx, wy, wz, blocks, borders, startX, startY, startZ, size);
 
             let visible = false;
-            if (type === BlockType.Water) {
+            const isFluidBlock = blockRegistry.isFluid(type);
+            if (isFluidBlock) {
               if (label === 'top') {
-                // Topo da água só é renderizado se o bloco acima não for água
-                if (nType !== BlockType.Water) visible = true;
+                if (nType !== type) visible = true;
               } else if (label === 'bottom') {
-                // Fundo da água só é renderizado se o bloco abaixo for ar
                 if (nType === -1 || nType === BlockType.Empty) visible = true;
               } else {
-                // Faces laterais da água
                 if (nType === -1 || nType === BlockType.Empty) {
                   visible = true;
-                } else if (nType === BlockType.Water) {
-                  // Renderiza face lateral se houver desnível entre os blocos adjacentes
+                } else if (nType === type) {
                   const myLvl = chunkData.waterLevels ? chunkData.waterLevels[ly * size * size + lz * size + lx] : 255;
                   const nLvl = this.getNeighbourWaterLevel(wx, wy, wz, chunkData.waterLevels, startX, startY, startZ, size);
                   if (myLvl > nLvl + 20) {
                     visible = true;
                   }
+                } else if (blockRegistry.isFluid(nType)) {
+                  visible = true; // boundary between water and lava
                 }
               }
             } else {
               // Solid block faces
               if (nType === -1 || nType === BlockType.Empty) visible = true;
               else if (nType === BlockType.Water)             visible = true; // visible through transparent water
+              else if (blockRegistry.isTransparent(nType) && nType !== type) visible = true;
               // solid→solid: culled ✅
             }
 
