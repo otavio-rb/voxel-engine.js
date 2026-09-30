@@ -9,7 +9,13 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "useDefineForClassFields": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@voxel/engine": ["engine/index.ts"],
+      "@voxel/engine/worker": ["engine/worker.ts"],
+      "@voxel/engine/chunk-worker": ["engine/chunk-worker.ts"]
+    }
   },
-  "include": ["src", "main.ts"]
+  "include": ["engine", "game"]
 }
