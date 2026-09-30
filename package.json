@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check:boundary": "node scripts/check-engine-boundary.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.3",
