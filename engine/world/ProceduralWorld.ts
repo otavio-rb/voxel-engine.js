@@ -25,7 +25,8 @@ import {
   WorkerResponse, 
   GeometryData, 
   WorldConfig, 
-  ChunkBorders 
+  ChunkBorders,
+  ChunkWaterBorders
 } from '../types';
 import { EventEmitter } from '../core/EventEmitter';
 import { EntityManager } from '../entities/EntityManager';
@@ -67,6 +68,53 @@ interface LoadedChunk extends LightChunk {
   animationStartTime?: number;
   readyNotified?: boolean;
 }
+
+/**
+ * GLSL shared by the chunk materials: Minecraft-style lightmap with a warm sun and cool
+ * ambient, fog that glows toward the sun, and texture-less voxel surface grain.
+ */
+const VOXEL_SHADING_GLSL = /* glsl */ `
+  uniform vec3 uSkyColor;
+  uniform vec3 uSunDirection;
+  uniform float uFogNear;
+  uniform float uFogFar;
+  uniform float uDaylight;
+  uniform float uMinLight;
+  uniform vec3 uBlockLightColor;
+  varying vec2 vLight;
+
+  const vec3 SUN_TINT = vec3(1.06, 1.0, 0.9);
+  const vec3 SHADE_TINT = vec3(0.88, 0.94, 1.08);
+
+  float voxelHash(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+
+  // Brilho = l / (4 - 3l) como no Minecraft; luz do céu tingida pelo sol, luz de bloco quente
+  vec3 voxelLight(vec3 normal, float sunDiffuse) {
+    float sky = vLight.x * uDaylight;
+    float blk = vLight.y;
+    float skyB = sky / (4.0 - 3.0 * sky);
+    float blkB = blk / (4.0 - 3.0 * blk);
+    float face = normal.y > 0.5 ? 1.0 : (normal.y < -0.5 ? 0.5 : (abs(normal.x) > 0.5 ? 0.7 : 0.85));
+    float lit = mix(1.0, 0.78 + 0.34 * sunDiffuse, uDaylight);
+    vec3 tint = mix(vec3(1.0), mix(SHADE_TINT, SUN_TINT, sunDiffuse), uDaylight * 0.8);
+    vec3 light = max(skyB * face * lit * tint, uBlockLightColor * blkB * face);
+    return max(light, vec3(uMinLight * face));
+  }
+
+  // Neblina com brilho quente na direção do sol
+  vec3 applyFog(vec3 color, vec3 worldPos) {
+    vec3 toFrag = worldPos - cameraPosition;
+    float dist = length(toFrag);
+    float fog = smoothstep(uFogNear, uFogFar, dist);
+    float sunAmount = pow(max(dot(toFrag / max(dist, 1e-3), normalize(uSunDirection)), 0.0), 8.0) * uDaylight;
+    vec3 fogColor = mix(uSkyColor, vec3(1.0, 0.86, 0.66), sunAmount * 0.45);
+    return mix(color, fogColor, fog);
+  }
+`;
 
 export default class ProceduralWorld extends Group {
   private readonly chunkSize: number;
@@ -210,32 +258,13 @@ export default class ProceduralWorld extends Group {
         }
       `,
       fragmentShader: `
-        uniform vec3 uSkyColor;
-        uniform vec3 uSunDirection;
         uniform float uShadersEnabled;
-        uniform float uFogNear;
-        uniform float uFogFar;
         uniform float uTime;
-        uniform float uDaylight;
-        uniform float uMinLight;
-        uniform vec3 uBlockLightColor;
         varying vec3 vNormal;
         varying vec3 vColor;
         varying vec3 vWorldPos;
         varying float vAo;
-        varying vec2 vLight;
-
-        // Lightmap do Minecraft: brilho = l / (4 - 3l), com luz de bloco em tom quente
-        vec3 voxelLight(vec3 normal, float sunDiffuse) {
-          float sky = vLight.x * uDaylight;
-          float blk = vLight.y;
-          float skyB = sky / (4.0 - 3.0 * sky);
-          float blkB = blk / (4.0 - 3.0 * blk);
-          float face = normal.y > 0.5 ? 1.0 : (normal.y < -0.5 ? 0.5 : (abs(normal.x) > 0.5 ? 0.7 : 0.85));
-          float skyShade = face * mix(1.0, 0.8 + 0.3 * sunDiffuse, uDaylight);
-          vec3 light = max(vec3(skyB * skyShade), uBlockLightColor * blkB * face);
-          return max(light, vec3(uMinLight * face));
-        }
+        ${VOXEL_SHADING_GLSL}
 
         void main() {
           float aoMultiplier = 0.2 + 0.8 * vAo;
@@ -244,21 +273,22 @@ export default class ProceduralWorld extends Group {
             return;
           }
 
-          vec3 sunDir = normalize(uSunDirection);
-          float diffuse = max(dot(vNormal, sunDir), 0.0);
+          // Textura procedural: 16x16 texels por face e variação leve por bloco (sem texturas)
+          vec3 inside = vWorldPos - vNormal * 0.001;
+          float texel = voxelHash(floor(inside * 16.0));
+          float block = voxelHash(floor(inside) + 17.0);
+          vec3 albedo = vColor * (0.93 + 0.1 * texel) * (0.97 + 0.06 * block);
 
-          vec3 lighting = vColor * voxelLight(vNormal, diffuse) * aoMultiplier * 1.1;
+          float diffuse = max(dot(vNormal, normalize(uSunDirection)), 0.0);
+          vec3 lighting = albedo * voxelLight(vNormal, diffuse) * aoMultiplier * 1.1;
 
           // Magma emissive heat: if color matches magma block, emits warm fiery glow
           if (vColor.r > 0.7 && vColor.b < 0.15 && vColor.g > 0.15 && vColor.g < 0.35) {
             float heatGlow = 0.45 + 0.25 * sin(uTime * 3.0 + vWorldPos.x * 2.0 + vWorldPos.y * 2.0 + vWorldPos.z * 2.0);
-            lighting = max(lighting, vColor * (1.1 + heatGlow));
+            lighting = max(lighting, albedo * (1.1 + heatGlow));
           }
 
-          float dist = length(vWorldPos - cameraPosition);
-          float fog = smoothstep(uFogNear, uFogFar, dist);
-          
-          gl_FragColor = vec4(mix(lighting, uSkyColor, fog), 1.0);
+          gl_FragColor = vec4(applyFog(lighting, vWorldPos), 1.0);
         }
       `,
       vertexColors: true,
@@ -305,55 +335,84 @@ export default class ProceduralWorld extends Group {
           
           // Use world coordinates so waves align across chunk borders (lava moves slower and thicker)
           bool isLava = (vColor.r > 0.6 && vColor.b < 0.2);
-          float waveSpeed = isLava ? 0.8 : 2.0;
-          float waveAmp = isLava ? 0.04 : 0.1;
-          pos.y += sin(uTime * waveSpeed + vWorldPos.x * 0.5) * waveAmp;
-          pos.y += cos(uTime * (waveSpeed * 0.75) + vWorldPos.z * 0.5) * waveAmp;
+          float waveSpeed = isLava ? 0.8 : 1.6;
+          float waveAmp = isLava ? 0.03 : 0.045;
+          float wave = sin(uTime * waveSpeed + vWorldPos.x * 0.5) + cos(uTime * (waveSpeed * 0.75) + vWorldPos.z * 0.5);
+          pos.y += wave * waveAmp;
+          vWorldPos.y += wave * waveAmp;
           
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
       `,
       fragmentShader: `
-        uniform vec3 uSkyColor;
-        uniform float uFogNear;
-        uniform float uFogFar;
         uniform float uTime;
-        uniform float uDaylight;
-        uniform float uMinLight;
-        uniform vec3 uBlockLightColor;
+        uniform float uShadersEnabled;
         varying vec3 vNormal;
         varying vec3 vColor;
         varying vec3 vWorldPos;
-        varying vec2 vLight;
+        ${VOXEL_SHADING_GLSL}
 
-        // Lightmap do Minecraft: brilho = l / (4 - 3l), com luz de bloco em tom quente
-        vec3 voxelLight(vec3 normal, float sunDiffuse) {
-          float sky = vLight.x * uDaylight;
-          float blk = vLight.y;
-          float skyB = sky / (4.0 - 3.0 * sky);
-          float blkB = blk / (4.0 - 3.0 * blk);
-          float face = normal.y > 0.5 ? 1.0 : (normal.y < -0.5 ? 0.5 : (abs(normal.x) > 0.5 ? 0.7 : 0.85));
-          float skyShade = face * mix(1.0, 0.8 + 0.3 * sunDiffuse, uDaylight);
-          vec3 light = max(vec3(skyB * skyShade), uBlockLightColor * blkB * face);
-          return max(light, vec3(uMinLight * face));
+        // Normal da superfície a partir de uma soma de ondas direcionais (derivadas analíticas)
+        // detail: 1 up close, fading with distance so fine ripples don't alias into speckle
+        vec3 waveNormal(vec2 p, float t, float detail) {
+          vec2 grad = vec2(0.0);
+          vec2 d1 = vec2(0.8, 0.6);  float w1 = dot(p, d1) * 1.7 + t * 1.9;
+          vec2 d2 = vec2(-0.5, 0.87); float w2 = dot(p, d2) * 2.9 + t * 2.6;
+          vec2 d3 = vec2(0.28, -0.96); float w3 = dot(p, d3) * 5.3 + t * 3.4;
+          vec2 d4 = vec2(-0.93, -0.37); float w4 = dot(p, d4) * 9.1 + t * 4.7;
+          grad += d1 * cos(w1) * 1.7 * 0.05;
+          grad += d2 * cos(w2) * 2.9 * 0.03;
+          grad += d3 * cos(w3) * 5.3 * 0.014 * detail;
+          grad += d4 * cos(w4) * 9.1 * 0.007 * detail * detail;
+          return normalize(vec3(-grad.x * (0.4 + 0.6 * detail), 1.0, -grad.y * (0.4 + 0.6 * detail)));
         }
 
         void main() {
-          float dist = length(vWorldPos - cameraPosition);
-          float fog = smoothstep(uFogNear, uFogFar, dist);
-          
           bool isLava = (vColor.r > 0.6 && vColor.b < 0.2);
           if (isLava) {
             float pulse = sin(uTime * 2.5 + vWorldPos.x * 1.5 + vWorldPos.z * 1.5) * 0.5 + 0.5;
             float slow = cos(uTime * 1.2 - vWorldPos.x * 0.8 + vWorldPos.z * 0.8) * 0.5 + 0.5;
+            float crust = voxelHash(floor(vWorldPos * 8.0 + vec3(0.0, 0.0, floor(uTime * 0.5))));
             vec3 coreHeat = vec3(1.0, 0.75, 0.1);
             vec3 darkCrust = vec3(0.85, 0.15, 0.02);
-            vec3 lavaBase = mix(darkCrust, coreHeat, pulse * 0.4 + slow * 0.3);
-            gl_FragColor = vec4(mix(lavaBase, uSkyColor, fog * 0.8), 1.0);
-          } else {
-            vec3 waterBase = mix(vColor, vec3(0.0, 0.4, 0.8), 0.3) * voxelLight(vNormal, 0.0) * 1.1;
-            gl_FragColor = vec4(mix(waterBase, uSkyColor, fog), 0.7);
+            vec3 lavaBase = mix(darkCrust, coreHeat, pulse * 0.4 + slow * 0.3) * (0.9 + 0.15 * crust);
+            vec3 foggedLava = applyFog(lavaBase, vWorldPos);
+            gl_FragColor = vec4(mix(lavaBase, foggedLava, 0.8), 1.0);
+            return;
           }
+
+          vec3 light = voxelLight(vNormal, 0.0);
+          vec3 base = mix(vColor, vec3(0.02, 0.32, 0.62), 0.35);
+          if (uShadersEnabled < 0.5) {
+            gl_FragColor = vec4(applyFog(base * light * 1.1, vWorldPos), 0.7);
+            return;
+          }
+
+          vec3 viewDir = normalize(cameraPosition - vWorldPos);
+          bool top = vNormal.y > 0.5;
+          float detail = clamp(1.0 - length(cameraPosition - vWorldPos) / 48.0, 0.0, 1.0);
+          vec3 n = top ? waveNormal(vWorldPos.xz, uTime, detail) : vNormal;
+          // Visto de baixo (câmera submersa), a superfície vira para o observador
+          if (dot(n, viewDir) < 0.0) n = -n;
+
+          // Fresnel (Schlick): transparente olhando para baixo, espelho de céu no ângulo rasante
+          float cosTheta = clamp(dot(n, viewDir), 0.0, 1.0);
+          float fresnel = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
+
+          vec3 deep = base * light * 1.05;
+          vec3 skyLight = uSkyColor * (0.35 + 0.65 * vLight.x);
+          vec3 reflection = mix(skyLight * 0.9, skyLight * 1.25, n.y);
+          vec3 col = mix(deep, reflection, fresnel * 0.85);
+
+          // Brilho especular do sol e cintilação nas cristas
+          vec3 sunDir = normalize(uSunDirection);
+          float sunUp = smoothstep(-0.05, 0.15, sunDir.y) * uDaylight * vLight.x;
+          vec3 h = normalize(sunDir + viewDir);
+          float spec = pow(max(dot(n, h), 0.0), 180.0) * 2.2 + pow(max(dot(n, h), 0.0), 24.0) * 0.12;
+          col += vec3(1.0, 0.95, 0.85) * spec * sunUp;
+
+          float alpha = mix(0.62, 0.95, fresnel) + spec * sunUp * 0.3;
+          gl_FragColor = vec4(applyFog(col, vWorldPos), clamp(alpha, 0.0, 1.0));
         }
       `,
       vertexColors: true,
@@ -1193,6 +1252,7 @@ export default class ProceduralWorld extends Group {
         existingWaterLevels: chunk.data.waterLevels,
         light: chunk.light,
         neighbourBorderLight: this.light.neighborBorders(chunk),
+        neighbourBorderWaterLevels: this.getNeighbourBorderWaterLevels(sx, sy, sz),
         buildMesh: true // Rebuild jobs explicitly request the mesh
       },
       (response) => this.onRebuildReady(response),
@@ -1250,6 +1310,32 @@ export default class ProceduralWorld extends Group {
       posY: py?.borders.negY,
       negZ: nz?.borders.posZ,
       posZ: pz?.borders.negZ
+    };
+  }
+
+  /**
+   * Water levels of the neighbors' facing layers, so the mesher can cull fluid faces
+   * between chunks. Sliced on demand since water levels change every simulation tick.
+   */
+  private getNeighbourBorderWaterLevels(sx: number, sy: number, sz: number): ChunkWaterBorders {
+    const S = this.chunkSize, A = S * S;
+    const [nx, px, ny, py, nz, pz] = this.neighborChunks(sx, sy, sz);
+    const slice = (n: LoadedChunk | null, pick: (a: number, b: number) => number): Uint8Array | undefined => {
+      const levels = n?.data.waterLevels;
+      if (!levels) return undefined;
+      const out = new Uint8Array(A);
+      for (let a = 0; a < S; a++) {
+        for (let b = 0; b < S; b++) out[a * S + b] = levels[pick(a, b)];
+      }
+      return out;
+    };
+    return {
+      negX: slice(nx, (y, z) => y * A + z * S + (S - 1)),
+      posX: slice(px, (y, z) => y * A + z * S),
+      negY: slice(ny, (z, x) => (S - 1) * A + z * S + x),
+      posY: slice(py, (z, x) => z * S + x),
+      negZ: slice(nz, (y, x) => y * A + (S - 1) * S + x),
+      posZ: slice(pz, (y, x) => y * A + x)
     };
   }
 

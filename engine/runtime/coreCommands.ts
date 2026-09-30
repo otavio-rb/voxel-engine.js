@@ -20,8 +20,8 @@ export function registerCoreCommands(ctx: EngineContext): void {
   commands.register('/creative', (_args, { player }) => player.setMode('debug'));
   commands.register('/survival', (_args, { player }) => player.setMode('normal'));
 
-  commands.register('/shaders', (args, { world }) => {
-    world.toggleShaders(args[0]?.toLowerCase() === 'on');
+  commands.register('/shaders', (args, ctx) => {
+    ctx.setShadersEnabled(args[0]?.toLowerCase() === 'on');
   });
 
   commands.register('/wireframe', (args, { world }) => {

@@ -13,7 +13,9 @@ import {
   BufferGeometry,
   BufferAttribute,
   PointsMaterial,
-  Points
+  Points,
+  Quaternion,
+  Camera
 } from 'three';
 
 export interface DimensionalRiftOptions {
@@ -54,6 +56,7 @@ export class DimensionalRift extends Group {
   public isDisposed = false;
   public readonly targetDimId: string;
   public readonly basePosition: Vector3;
+  private readonly parentQuat = new Quaternion();
 
   constructor(options: DimensionalRiftOptions) {
     super();
@@ -66,7 +69,7 @@ export class DimensionalRift extends Group {
     const darkColor = baseColor.clone().offsetHSL(-0.04, 0.1, -0.45);
 
     // ── 1. Fenda Central: Rasgo de Plasma Dimensional ─────────────────────────
-    const fissureGeo = new PlaneGeometry(2.4, 4.4, 48, 48);
+    const fissureGeo = new PlaneGeometry(2.4, 4.4, 24, 24);
 
     this.fissureMaterial = new ShaderMaterial({
       uniforms: {
@@ -112,69 +115,73 @@ export class DimensionalRift extends Group {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
         }
 
+        // Ruído de valor que repete a cada 8 células em x (sem costura onde o ângulo dá a volta)
         float noise(vec2 p) {
           vec2 i = floor(p);
           vec2 f = fract(p);
           vec2 u = f * f * (3.0 - 2.0 * f);
-          return mix(
-            mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
-            mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
-            u.y
-          );
-        }
-
-        float fbm(vec2 p) {
-          float v = 0.0;
-          v += 0.500 * noise(p); p *= 2.02;
-          v += 0.250 * noise(p); p *= 2.03;
-          v += 0.125 * noise(p);
-          return v;
+          float x0 = mod(i.x, 8.0), x1 = mod(i.x + 1.0, 8.0);
+          return mix(mix(hash(vec2(x0, i.y)), hash(vec2(x1, i.y)), u.x),
+                     mix(hash(vec2(x0, i.y + 1.0)), hash(vec2(x1, i.y + 1.0)), u.x), u.y);
         }
 
         void main() {
           vec2 coord = (vUv - 0.5) * 2.0;
           coord.y *= 1.6; // Proporção da fenda vertical
-          float dist = length(coord);
 
-          // Vórtice angular espiral
-          float angle = atan(coord.y, coord.x);
-          float swirlSpeed = 4.0 + uSuction * 14.0;
-          float spiral = angle + (4.0 + uSuction * 5.0) / (dist + 0.1) - uTime * swirlSpeed;
+          // ── Contorno do rasgo: lente vertical com bordas onduladas que se abre com a sucção ──
+          float open = 0.42 + uSuction * 0.38;
+          float wobble = sin(coord.y * 7.0 + uTime * 3.1) * 0.06 + sin(coord.y * 13.0 - uTime * 4.3) * 0.03;
+          float halfWidth = open * sqrt(max(0.0, 1.0 - pow(coord.y / 1.45, 2.0)));
+          float edgeDist = abs(coord.x + wobble * (1.0 - uSuction * 0.5)) - halfWidth;
+          // Longe do rasgo não há nada para desenhar: sai antes do túnel
+          if (edgeDist > 0.8) discard;
+          float inside = 1.0 - smoothstep(-0.03, 0.03, edgeDist);
 
-          // Costura do rasgo dimensional (raio fractal com arcos elétricos)
-          float slitOffset = fbm(vec2(coord.y * 3.5, uTime * 2.5) + spiral * 0.35);
-          float slit = abs(coord.x + (slitOffset - 0.5) * 0.55);
+          vec2 tc = vec2(coord.x / max(open, 0.01), coord.y / 1.45);
+          float angle = atan(tc.y, tc.x);
+          vec3 col = vec3(0.0);
 
-          // Centelhas e filamentos de alta energia
-          float arcs = pow(max(0.0, 1.0 - slit * 6.0), 4.0) * (0.8 + 0.2 * sin(uTime * 25.0 + coord.y * 20.0));
+          // ── Túnel para a outra dimensão: coordenadas polares com profundidade 1/r ──
+          if (inside > 0.001) {
+            float r = length(tc) + 1e-3;
+            float depth = 0.45 / r + uTime * (1.2 + uSuction * 7.0);
+            vec2 tunnelUv = vec2((angle + depth * (0.35 + uSuction * 0.6)) * 1.2732, depth * 1.6); // 4/pi: 8 faixas
+            float walls = noise(tunnelUv) * 0.7 + 0.3 * (0.5 + 0.5 * sin(tunnelUv.x * 1.5708 + depth * 2.0));
+            float bands = pow(0.5 + 0.5 * sin(depth * 9.42 + walls * 4.0), 3.0);
+            float stars = step(0.985, hash(floor(tunnelUv * vec2(6.0, 6.0))));
 
-          // Singularidade do horizonte de eventos (núcleo abismal)
-          float eventHorizon = smoothstep(0.12, 0.45 + uSuction * 0.2, dist);
+            vec3 tunnel = mix(uDarkColor, uCoronaColor, walls) + uEdgeColor * bands * 0.9 + vec3(stars * 0.8);
+            // Fundo do túnel: singularidade escura; paredes clareiam perto da borda
+            tunnel *= smoothstep(0.05, 0.6, r) * (0.6 + 0.4 * r);
+            tunnel = mix(tunnel, uCoreColor, smoothstep(0.35, 0.0, r) * (1.0 - uSuction * 0.4));
+            col = tunnel * inside;
+          }
 
-          // Camada cromática
-          vec3 col = mix(uCoreColor, uDarkColor, eventHorizon);
-          col = mix(col, uCoronaColor, pow(max(0.0, 1.0 - dist), 2.0));
-          col += uEdgeColor * arcs * 3.5;
-          col += uCoronaColor * pow(max(0.0, 1.0 - slit * 3.0), 2.5) * 1.8;
+          // ── Borda incandescente com arcos elétricos ──
+          float rim = exp(-abs(edgeDist) * 28.0);
+          float arcs = pow(noise(vec2(angle * 2.546 + uTime * 3.0, coord.y * 9.0 - uTime * 6.0)), 3.0);
+          col += (uEdgeColor * (0.9 + arcs * 1.8) + vec3(0.4) * pow(rim, 4.0)) * rim;
 
-          // Pulsação e brilho
-          float pulse = 0.88 + 0.12 * sin(uTime * 8.0);
-          col *= pulse * (1.0 + uSuction * 1.5);
+          // Coroa externa esmaecendo no espaço ao redor
+          float corona = exp(-max(edgeDist, 0.0) * 5.0) * (1.0 - inside);
+          col += uCoronaColor * corona * 0.6;
 
-          // Alpha com desvanecimento suave nas bordas
-          float edgeFade = 1.0 - smoothstep(0.7, 1.05, max(abs(coord.x * 1.2), abs(coord.y * 0.65)));
-          float alpha = clamp(edgeFade * (0.85 + uSuction * 0.15), 0.0, 1.0);
+          col *= (0.9 + 0.1 * sin(uTime * 8.0)) * (1.0 + uSuction * 0.8);
 
-          gl_FragColor = vec4(col, alpha);
+          float edgeFade = 1.0 - smoothstep(0.75, 1.0, max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) * 2.0);
+          float alpha = max(inside, max(rim, corona * 0.7)) * edgeFade;
+
+          gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
         }
       `,
       side: DoubleSide,
       transparent: true,
-      blending: AdditiveBlending,
       depthWrite: false
     });
 
     this.fissureMesh = new Mesh(fissureGeo, this.fissureMaterial);
+    this.fissureMesh.onBeforeRender = (_r, _s, camera) => this.faceCamera(this.fissureMesh, camera);
     this.add(this.fissureMesh);
 
     // ── 2. Disco de Acreção Espiral Inclinado ──────────────────────────────────
@@ -256,6 +263,7 @@ export class DimensionalRift extends Group {
     });
 
     this.haloMesh = new Mesh(haloGeo, this.haloMaterial);
+    this.haloMesh.onBeforeRender = (_r, _s, camera) => this.faceCamera(this.haloMesh, camera);
     this.add(this.haloMesh);
 
     // ── 4. Fragmentos e Lascas de Espaço-Tempo Orbitando ───────────────────────
@@ -324,6 +332,13 @@ export class DimensionalRift extends Group {
     });
     this.pulseWaveMesh = new Mesh(pulseGeo, pulseMat);
     this.add(this.pulseWaveMesh);
+  }
+
+  /** Billboards a child so the portal opening always faces the viewer (matches the screen-space lens). */
+  private faceCamera(mesh: Mesh, camera: Camera): void {
+    this.getWorldQuaternion(this.parentQuat).invert();
+    mesh.quaternion.copy(this.parentQuat).multiply(camera.quaternion);
+    mesh.updateMatrixWorld();
   }
 
   public update(dtSeconds: number): void {

@@ -194,6 +194,14 @@ export class ExplosionManager {
     }
   }
 
+  public getExplosions(): ReadonlySet<Explosion> {
+    return this.explosions;
+  }
+
+  public getNuclearExplosions(): ReadonlySet<NuclearExplosion> {
+    return this.nuclearExplosions;
+  }
+
   public clear(): void {
     for (const exp of this.explosions) {
       exp.dispose();

@@ -13,6 +13,8 @@ export {
 } from './runtime/EngineRuntime';
 export { CommandRegistry, type CommandHandler } from './runtime/CommandRegistry';
 
+export { PostProcessor, type ScreenPass } from './render/PostProcessor';
+
 export { EventEmitter, type EventCallback } from './core/EventEmitter';
 export { GameLoop, type GameLoopOptions } from './core/GameLoop';
 
