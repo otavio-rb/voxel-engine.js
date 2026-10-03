@@ -296,57 +296,66 @@ html, body {
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 4px;
-  background: rgba(0, 0, 0, 0.6);
-  border: 2px solid #3c3c3c;
-  padding: 4px;
+  gap: 5px;
+  background: rgba(14, 14, 18, 0.75);
+  border: 2px solid #3c3c4c;
+  padding: 5px;
   pointer-events: auto;
   z-index: 30;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(4px);
 }
 
 .hotbar-slot {
-  width: 48px;
-  height: 48px;
-  background: rgba(40, 40, 40, 0.75);
-  border: 2px solid #3c3c3c;
+  width: 50px;
+  height: 50px;
+  background: rgba(30, 30, 38, 0.85);
+  border: 2px solid #444455;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
   color: white;
-  transition: none;
+  transition: transform 0.1s ease, border-color 0.12s ease, background 0.12s ease;
   overflow: hidden;
   position: relative;
   cursor: pointer;
   user-select: none;
+  border-radius: 4px;
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.6), inset 2px 2px 0 rgba(255, 255, 255, 0.15);
 }
 
 .hotbar-slot:hover {
-  background: rgba(70, 70, 70, 0.85);
-  border-color: #888888;
+  background: rgba(55, 55, 70, 0.95);
+  border-color: #9999bb;
+  transform: translateY(-2px);
 }
 
 .hotbar-slot.selected {
   border-color: #ffffff;
-  background: rgba(100, 100, 100, 0.85);
-  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4);
+  background: rgba(65, 65, 85, 0.95);
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.7), inset 2px 2px 0 rgba(255, 255, 255, 0.4), 0 0 12px rgba(255, 255, 255, 0.6);
+  transform: scale(1.06);
+  z-index: 2;
 }
 
 .slot-key {
   position: absolute;
   top: 2px;
-  left: 3px;
-  font-size: 8px;
+  left: 4px;
+  font-size: 9px;
   font-family: Minecraft, sans-serif;
-  color: #aaaaaa;
+  color: #ffdd44;
+  text-shadow: 1px 1px 0 #000;
 }
 
 .slot-icon {
-  width: 18px;
-  height: 18px;
-  border-radius: 2px;
-  margin-top: -8px;
-  border: 1px solid rgba(0, 0, 0, 0.4);
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  margin-top: -6px;
+  border: 1px solid rgba(0, 0, 0, 0.5);
 }
 
 .hotbar-slot[data-block="2"] .slot-icon { background: #557a2b; }
@@ -363,6 +372,20 @@ html, body {
 .hotbar-slot[data-block="11"] .slot-icon { background: #2b2b32; }
 .hotbar-slot[data-block="14"] .slot-icon { background: #48484e; }
 .hotbar-slot[data-block="15"] .slot-icon { background: #191426; box-shadow: 0 0 4px rgba(70, 40, 100, 0.6); }
+.hotbar-slot[data-block="58"] .slot-icon { background: #55aa28; }
+.hotbar-slot[data-block="47"] .slot-icon { background: #4e7a2e; }
+.hotbar-slot[data-block="48"] .slot-icon { background: #ffb732; box-shadow: 0 0 6px rgba(255, 183, 50, 0.8); }
+.hotbar-slot[data-block="53"] .slot-icon { background: #58e0d0; box-shadow: 0 0 6px rgba(88, 224, 208, 0.8); }
+.hotbar-slot[data-block="63"] .slot-icon { background: #9333ea; box-shadow: 0 0 7px rgba(147, 51, 234, 0.85); }
+.hotbar-slot[data-block="64"] .slot-icon { background: #dc2626; box-shadow: 0 0 6px rgba(220, 38, 38, 0.7); }
+.hotbar-slot[data-block="65"] .slot-icon { background: #0d9488; box-shadow: 0 0 6px rgba(13, 148, 136, 0.75); }
+.hotbar-slot[data-block="66"] .slot-icon { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.95); }
+.hotbar-slot[data-block="61"] .slot-icon { background: #d32f2f; }
+.hotbar-slot[data-block="62"] .slot-icon { background: #8d6e63; }
+.hotbar-slot[data-block="67"] .slot-icon { background: #795548; }
+.hotbar-slot[data-block="59"] .slot-icon { background: #e53935; }
+.hotbar-slot[data-block="60"] .slot-icon { background: #fdd835; }
+.hotbar-slot[data-block="55"] .slot-icon { background: #c9a6ff; box-shadow: 0 0 6px rgba(201, 166, 255, 0.7); }
 
 .slot-label {
   position: absolute;
@@ -427,20 +450,498 @@ html, body {
 
 .chat-input-container {
   width: 100%;
+  display: none;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.chat-input-container.active {
+  display: flex;
 }
 
 .chat-input {
-  width: 100%;
-  padding: 10px 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
   border: 2px solid #555555;
-  background-color: rgba(0, 0, 0, 0.85);
-  color: white;
+  background-color: rgba(0, 0, 0, 0.88);
+  color: #ffffff;
   font-size: 13px;
   font-family: Minecraft, monospace;
   outline: none;
+  box-shadow: inset 1px 1px 0px 0px #222222;
+  border-radius: 0;
   display: none;
+}
+
+.chat-input-container.active .chat-input {
+  display: block;
 }
 
 .chat-input:focus {
   border-color: #ffffff;
 }
+
+/* Botões do Chat (Enviar e Fechar) no Estilo Minecraft */
+.chat-btn {
+  font-family: Minecraft, monospace, sans-serif;
+  font-size: 13px;
+  color: #e0e0e0;
+  text-shadow: 1px 1px 0px #1a1a1a;
+  background: #5a5a5a;
+  border: 2px solid #000000;
+  box-shadow: 
+    inset 2px 2px 0px 0px #888888, 
+    inset -2px -2px 0px 0px #2e2e2e;
+  padding: 8px 14px;
+  cursor: pointer;
+  user-select: none;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  outline: none;
+  border-radius: 0;
+  flex-shrink: 0;
+  transition: none;
+}
+
+.chat-input-container.active .chat-btn {
+  display: inline-flex;
+}
+
+.chat-btn:hover {
+  background: #707070;
+  color: #ffffa0;
+  text-shadow: 1px 1px 0px #2a2a00;
+  box-shadow: 
+    inset 2px 2px 0px 0px #9e9e9e, 
+    inset -2px -2px 0px 0px #383838;
+}
+
+.chat-btn:active {
+  background: #404040;
+  box-shadow: 
+    inset 2px 2px 0px 0px #1f1f1f, 
+    inset -2px -2px 0px 0px #585858;
+}
+
+.chat-send-btn {
+  letter-spacing: 0.5px;
+}
+
+.chat-close-btn {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #ff9999;
+}
+
+.chat-close-btn:hover {
+  color: #ffffff;
+  background: #842e2e;
+  box-shadow: 
+    inset 2px 2px 0px 0px #b04444, 
+    inset -2px -2px 0px 0px #4a1515;
+}
+
+/* --- Mobile Controls (Touch / Bedrock UI) --- */
+.mobile-controls-hidden {
+  display: none !important;
+}
+
+#mobile-controls {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 35;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.mobile-controls-paused {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Mobile Top Bar (Chat e Pausa) */
+#mobile-top-bar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 10px;
+  pointer-events: auto;
+  z-index: 40;
+}
+
+.mobile-top-btn {
+  width: 44px;
+  height: 44px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  outline: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.mobile-top-btn:active {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Left Controls: D-Pad */
+#mobile-left-controls {
+  position: absolute;
+  bottom: 24px;
+  left: 20px;
+  pointer-events: auto;
+}
+
+#mobile-dpad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  user-select: none;
+}
+
+.dpad-middle-row {
+  display: flex;
+  align-items: center;
+}
+
+.dpad-btn {
+  width: 52px;
+  height: 52px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+
+.dpad-btn:active, .dpad-btn.active {
+  background: rgba(255, 255, 255, 0.35);
+  border-color: #ffffff;
+}
+
+.dpad-center {
+  background: rgba(0, 0, 0, 0.65);
+  font-size: 14px;
+}
+
+/* Right Controls: Actions & Movement */
+#mobile-right-controls {
+  position: absolute;
+  bottom: 24px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.mobile-actions-row, .mobile-movement-row {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.mobile-btn {
+  min-width: 60px;
+  height: 54px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-family: Minecraft, sans-serif;
+  cursor: pointer;
+  outline: none;
+  gap: 2px;
+}
+
+.mobile-btn-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.mobile-btn-label, .mobile-btn-sub {
+  font-size: 10px;
+  text-shadow: 1px 1px 0px #000;
+}
+
+.mobile-btn:active, .mobile-btn-active {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: #ffffff;
+}
+
+@media (max-width: 768px) {
+  .chat-wrapper {
+    width: 320px;
+    bottom: 80px;
+    left: 10px;
+  }
+  .chat {
+    height: 150px;
+  }
+}
+
+/* ==========================================================================
+   INVENTORY MODAL (Pressione 'E' para abrir - Design idêntico à Hotbar)
+   ========================================================================== */
+#inventory-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.inventory-modal-hidden {
+  display: none !important;
+}
+
+.inventory-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(5px);
+}
+
+.inventory-panel {
+  position: relative;
+  z-index: 1001;
+  width: min(600px, 94vw);
+  max-height: min(680px, 90vh);
+  background: rgba(14, 14, 18, 0.92);
+  border: 2px solid #3c3c4c;
+  border-radius: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: Minecraft, sans-serif;
+  animation: invPopIn 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(8px);
+}
+
+@keyframes invPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.inventory-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.45);
+  border-bottom: 2px solid #3c3c4c;
+  gap: 10px;
+}
+
+.inventory-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #000;
+  white-space: nowrap;
+}
+
+.inv-icon {
+  font-size: 16px;
+}
+
+.inventory-search-box {
+  flex: 1;
+  max-width: 260px;
+}
+
+#inventory-search {
+  width: 100%;
+  padding: 6px 10px;
+  background: rgba(30, 30, 38, 0.85);
+  border: 2px solid #444455;
+  border-radius: 4px;
+  color: #ffffff;
+  font-family: Minecraft, sans-serif;
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.6), inset 2px 2px 0 rgba(255, 255, 255, 0.15);
+  transition: border-color 0.15s ease;
+}
+
+#inventory-search:focus {
+  border-color: #ffffff;
+}
+
+.inventory-close-btn {
+  background: rgba(30, 30, 38, 0.85);
+  border: 2px solid #444455;
+  color: #cccccc;
+  font-family: Minecraft, sans-serif;
+  font-size: 14px;
+  font-weight: bold;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 4px;
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.6), inset 2px 2px 0 rgba(255, 255, 255, 0.15);
+  transition: all 0.1s ease;
+}
+
+.inventory-close-btn:hover {
+  background: #dc2626;
+  border-color: #ef4444;
+  color: #ffffff;
+}
+
+/* Category Filter Tabs */
+.inventory-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 8px 14px;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 2px solid #3c3c4c;
+}
+
+.inv-cat-btn {
+  padding: 5px 10px;
+  background: rgba(30, 30, 38, 0.85);
+  border: 2px solid #444455;
+  color: #aaaaaa;
+  font-family: Minecraft, sans-serif;
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.1s ease;
+  user-select: none;
+  box-shadow: inset -1px -1px 0 rgba(0, 0, 0, 0.5), inset 1px 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.inv-cat-btn:hover {
+  background: rgba(55, 55, 70, 0.95);
+  border-color: #9999bb;
+  color: #ffffff;
+}
+
+.inv-cat-btn.active {
+  border-color: #ffffff;
+  background: rgba(65, 65, 85, 0.95);
+  color: #ffffff;
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.7), inset 2px 2px 0 rgba(255, 255, 255, 0.4), 0 0 8px rgba(255, 255, 255, 0.4);
+}
+
+/* Catalog Grid Container */
+.inventory-catalog-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  max-height: 320px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.inventory-catalog-container::-webkit-scrollbar {
+  width: 6px;
+}
+.inventory-catalog-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+}
+.inventory-catalog-container::-webkit-scrollbar-thumb {
+  background: #3c3c4c;
+  border-radius: 3px;
+}
+.inventory-catalog-container::-webkit-scrollbar-thumb:hover {
+  background: #555566;
+}
+
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 50px);
+  gap: 5px;
+  justify-content: center;
+}
+
+.inv-empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 30px 10px;
+  color: #888888;
+  font-size: 12px;
+}
+
+/* Inventory Footer & Hotbar Preview */
+.inventory-footer {
+  padding: 8px 14px 12px;
+  background: rgba(0, 0, 0, 0.45);
+  border-top: 2px solid #3c3c4c;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.inv-footer-hint {
+  font-size: 10px;
+  color: #aaaaaa;
+  text-align: center;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.inv-footer-hint strong {
+  color: #ffdd44;
+}
+
+.inventory-hotbar-preview-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.inv-hotbar-title {
+  font-size: 9px;
+  color: #888888;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.inventory-hotbar-preview {
+  display: flex;
+  gap: 5px;
+  background: rgba(14, 14, 18, 0.75);
+  border: 2px solid #3c3c4c;
+  padding: 5px;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+

@@ -22,9 +22,6 @@ export const dimensionsPlugin: EnginePlugin = {
     ctx.postProcessor.add(warp);
 
     dimensionManager.onChatMessage = (text) => chat(ctx, text);
-    dimensionManager.onAbsorptionProgress = (progress, targetDimId, colorHex) => {
-      ctx.emitToMain('portal:absorption', { progress, targetDimId, colorHex });
-    };
     dimensionManager.onWarpEffect = (dim) => warp.triggerExit(dim.portalColor ?? 0x9c27b0);
 
     // Lente gravitacional na fenda mais próxima e a câmera sendo sugada para dentro dela

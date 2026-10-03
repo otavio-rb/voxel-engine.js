@@ -2,7 +2,7 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <link rel="stylesheet" href="./style.css" />
     <title>Voxel Engine</title>
   </head>
@@ -16,37 +16,125 @@
 
     <div id="interface">
       <div id="hotbar">
-        <div class="hotbar-slot selected" data-block="2"><span class="slot-key">1</span><div class="slot-icon"></div><span class="slot-label">Grass</span></div>
-        <div class="hotbar-slot" data-block="0"><span class="slot-key">2</span><div class="slot-icon"></div><span class="slot-label">Stone</span></div>
-        <div class="hotbar-slot" data-block="1"><span class="slot-key">3</span><div class="slot-icon"></div><span class="slot-label">Dirt</span></div>
-        <div class="hotbar-slot" data-block="3"><span class="slot-key">4</span><div class="slot-icon"></div><span class="slot-label">Sand</span></div>
-        <div class="hotbar-slot" data-block="4"><span class="slot-key">5</span><div class="slot-icon"></div><span class="slot-label">Snow</span></div>
-        <div class="hotbar-slot" data-block="9"><span class="slot-key">6</span><div class="slot-icon"></div><span class="slot-label">Wood</span></div>
-        <div class="hotbar-slot" data-block="10"><span class="slot-key">7</span><div class="slot-icon"></div><span class="slot-label">Leaves</span></div>
-        <div class="hotbar-slot" data-block="7"><span class="slot-key">8</span><div class="slot-icon"></div><span class="slot-label">Coal</span></div>
-        <div class="hotbar-slot" data-block="6"><span class="slot-key">9</span><div class="slot-icon"></div><span class="slot-label">Água</span></div>
-        <div class="hotbar-slot" data-block="13"><span class="slot-key">0</span><div class="slot-icon"></div><span class="slot-label">Lava</span></div>
-        <div class="hotbar-slot" data-block="12"><span class="slot-key">-</span><div class="slot-icon"></div><span class="slot-label">Magma</span></div>
-        <div class="hotbar-slot" data-block="11"><span class="slot-key">=</span><div class="slot-icon"></div><span class="slot-label">Basalto</span></div>
-        <div class="hotbar-slot" data-block="14"><div class="slot-icon"></div><span class="slot-label">Cinzas</span></div>
-        <div class="hotbar-slot" data-block="15"><div class="slot-icon"></div><span class="slot-label">Obsidiana</span></div>
-        <div class="hotbar-slot" data-block="17"><div class="slot-icon"></div><span class="slot-label">Aether Grass</span></div>
-        <div class="hotbar-slot" data-block="19"><div class="slot-icon"></div><span class="slot-label">Holystone</span></div>
-        <div class="hotbar-slot" data-block="21"><div class="slot-icon"></div><span class="slot-label">Aercloud</span></div>
-        <div class="hotbar-slot" data-block="25"><div class="slot-icon"></div><span class="slot-label">Gravitite</span></div>
-        <div class="hotbar-slot" data-block="26"><div class="slot-icon"></div><span class="slot-label">Ambrosium</span></div>
-        <div class="hotbar-slot" data-block="32"><div class="slot-icon"></div><span class="slot-label">Bétula</span></div>
-        <div class="hotbar-slot" data-block="34"><div class="slot-icon"></div><span class="slot-label">Pinheiro</span></div>
-        <div class="hotbar-slot" data-block="36"><div class="slot-icon"></div><span class="slot-label">Cerejeira</span></div>
-        <div class="hotbar-slot" data-block="39"><div class="slot-icon"></div><span class="slot-label">Cacto</span></div>
+        <div class="hotbar-slot selected" data-slot="0" data-block="2"><span class="slot-key">1</span><div class="slot-icon"></div><span class="slot-label">Grama</span></div>
+        <div class="hotbar-slot" data-slot="1" data-block="0"><span class="slot-key">2</span><div class="slot-icon"></div><span class="slot-label">Pedra</span></div>
+        <div class="hotbar-slot" data-slot="2" data-block="1"><span class="slot-key">3</span><div class="slot-icon"></div><span class="slot-label">Terra</span></div>
+        <div class="hotbar-slot" data-slot="3" data-block="9"><span class="slot-key">4</span><div class="slot-icon"></div><span class="slot-label">Madeira</span></div>
+        <div class="hotbar-slot" data-slot="4" data-block="10"><span class="slot-key">5</span><div class="slot-icon"></div><span class="slot-label">Folhas</span></div>
+        <div class="hotbar-slot" data-slot="5" data-block="53"><span class="slot-key">6</span><div class="slot-icon"></div><span class="slot-label">Fungo Ciano</span></div>
+        <div class="hotbar-slot" data-slot="6" data-block="63"><span class="slot-key">7</span><div class="slot-icon"></div><span class="slot-label">Fungo Violeta</span></div>
+        <div class="hotbar-slot" data-slot="7" data-block="61"><span class="slot-key">8</span><div class="slot-icon"></div><span class="slot-label">Cogumelo Verm.</span></div>
+        <div class="hotbar-slot" data-slot="8" data-block="66"><span class="slot-key">9</span><div class="slot-icon"></div><span class="slot-label">Cogumelo Ouro</span></div>
       </div>
       <div id="crosshair"></div>
       <div class="chat-wrapper">
         <div class="chat">
-          <div class="chat-message">Bem-vindo ao Voxel Engine! Pressione ';' para digitar comandos.</div>
+          <div class="chat-message">Bem-vindo ao Voxel Engine! Pressione 'E' para abrir o inventário e ';' para o chat.</div>
         </div>
         <div class="chat-input-container">
           <input type="text" class="chat-input" placeholder="Digite um comando (/help, /volcano, /dim aether)..." spellcheck="false" />
+          <button type="button" id="chat-send-btn" class="chat-btn chat-send-btn" title="Enviar">Enviar</button>
+          <button type="button" id="chat-close-btn" class="chat-btn chat-close-btn" title="Fechar">✕</button>
+        </div>
+      </div>
+
+      <!-- Inventory Modal (Pressione 'E' para abrir/fechar) -->
+      <div id="inventory-modal" class="inventory-modal-hidden">
+        <div class="inventory-backdrop"></div>
+        <div class="inventory-panel">
+          <div class="inventory-header">
+            <div class="inventory-title">
+              <span class="inv-icon">📦</span>
+              <span>Inventário de Blocos</span>
+            </div>
+            <div class="inventory-search-box">
+              <input type="text" id="inventory-search" placeholder="🔍 Buscar bloco..." autocomplete="off" spellcheck="false" />
+            </div>
+            <button type="button" id="inventory-close-btn" class="inventory-close-btn" title="Fechar (E / Esc)">✕</button>
+          </div>
+
+          <div class="inventory-categories">
+            <button type="button" class="inv-cat-btn active" data-cat="all">Todos</button>
+            <button type="button" class="inv-cat-btn" data-cat="building">Construção</button>
+            <button type="button" class="inv-cat-btn" data-cat="nature">Natureza</button>
+            <button type="button" class="inv-cat-btn" data-cat="fungi">Cogumelos & Cavernas</button>
+            <button type="button" class="inv-cat-btn" data-cat="special">Minérios & Especiais</button>
+          </div>
+
+          <div class="inventory-catalog-container">
+            <div id="inventory-grid" class="inventory-grid">
+              <!-- Cards gerados dinamicamente via UI.ts -->
+            </div>
+          </div>
+
+          <div class="inventory-footer">
+            <div class="inv-footer-hint">
+              <span>💡 Dica: Clique em um bloco para equipar no slot ativo, ou use as teclas <strong>1-9</strong> ao passar o mouse</span>
+            </div>
+            <div class="inventory-hotbar-preview-wrapper">
+              <span class="inv-hotbar-title">Barra Rápida (1-9)</span>
+              <div id="inventory-hotbar-preview" class="inventory-hotbar-preview">
+                <!-- 9 slots sincronizados com a HUD -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile Controls (Layout Padrão Minecraft Bedrock / Voxel PE) -->
+    <div id="mobile-controls" class="mobile-controls-hidden">
+      <!-- Top Bar: Chat, Inventário, Menu / Pause -->
+      <div id="mobile-top-bar">
+        <button id="mobile-btn-chat" class="mobile-top-btn" type="button" aria-label="Abrir Chat" title="Abrir Chat">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+            <path d="M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>
+          </svg>
+        </button>
+        <button id="mobile-btn-inventory" class="mobile-top-btn" type="button" aria-label="Abrir Inventário" title="Abrir Inventário">
+          <span style="font-size: 19px; line-height: 1;">🎒</span>
+        </button>
+        <button id="mobile-btn-pause" class="mobile-top-btn" type="button" aria-label="Pausar / Menu" title="Pausar / Menu">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Left Controls: D-Pad -->
+      <div id="mobile-left-controls">
+        <div id="mobile-dpad">
+          <button id="dpad-up" class="dpad-btn dpad-up" type="button" data-dir="w" aria-label="Frente">▲</button>
+          <div class="dpad-middle-row">
+            <button id="dpad-left" class="dpad-btn dpad-left" type="button" data-dir="a" aria-label="Esquerda">◀</button>
+            <button id="dpad-center" class="dpad-btn dpad-center" type="button" aria-label="Agachar / Alternar">◆</button>
+            <button id="dpad-right" class="dpad-btn dpad-right" type="button" data-dir="d" aria-label="Direita">▶</button>
+          </div>
+          <button id="dpad-down" class="dpad-btn dpad-down" type="button" data-dir="s" aria-label="Atrás">▼</button>
+        </div>
+      </div>
+
+      <!-- Right Controls: Actions (Quebrar, Colocar) + Movement (Agachar, Pular) -->
+      <div id="mobile-right-controls">
+        <div class="mobile-actions-row">
+          <button id="btn-mobile-break" class="mobile-btn mobile-btn-break" type="button" aria-label="Quebrar Bloco">
+            <span class="mobile-btn-icon">⛏️</span>
+            <span class="mobile-btn-label">Quebrar</span>
+          </button>
+          <button id="btn-mobile-place" class="mobile-btn mobile-btn-place" type="button" aria-label="Colocar Bloco">
+            <span class="mobile-btn-icon">🧱</span>
+            <span class="mobile-btn-label">Colocar</span>
+          </button>
+        </div>
+        <div class="mobile-movement-row">
+          <button id="btn-mobile-crouch" class="mobile-btn mobile-btn-crouch" type="button" aria-label="Agachar / Descer">
+            <span class="mobile-btn-icon">▼</span>
+            <span class="mobile-btn-sub">Agachar</span>
+          </button>
+          <button id="btn-mobile-jump" class="mobile-btn mobile-btn-jump" type="button" aria-label="Pular / Subir">
+            <span class="mobile-btn-icon">▲</span>
+            <span class="mobile-btn-sub">Pular</span>
+          </button>
         </div>
       </div>
     </div>
@@ -104,9 +192,9 @@
           </button>
         </div>
 
-        <!-- Dicas de Teclado -->
+        <!-- Dicas de Teclado / Toque -->
         <div class="mc-footer-tips">
-          WASD: Mover | Espaço: Pular | 1-9: Blocos | Clique Esq: Quebrar | Clique Dir: Colocar | ESC: Pausa
+          WASD ou D-Pad: Mover | Espaço / Pular | Toque na tela: Olhar | Clique / Quebrar e Colocar
         </div>
 
       </div>

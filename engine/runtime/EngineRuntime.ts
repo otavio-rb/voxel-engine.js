@@ -160,6 +160,11 @@ export function runEngineWorker(options: EngineWorkerOptions): void {
       case 'select_slot':
         interaction.selectSlot(payload.index);
         break;
+      case 'set_hotbar':
+        if (payload?.types && Array.isArray(payload.types)) {
+          interaction.setHotbar(payload.types);
+        }
+        break;
       case 'wheel':
         interaction.onWheel(payload.direction);
         break;

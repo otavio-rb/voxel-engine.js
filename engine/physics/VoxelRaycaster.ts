@@ -28,7 +28,7 @@ export function raycastVoxel(
   origin: Vector3,
   direction: Vector3,
   maxDistance: number = 8,
-  isSolidPredicate: (type: number) => boolean = (t) => blockRegistry.isSolid(t)
+  isSolidPredicate: (type: number) => boolean = (t) => blockRegistry.isInteractable(t)
 ): VoxelRaycastHit | null {
   // Posição inicial no grid
   let x = Math.floor(origin.x);

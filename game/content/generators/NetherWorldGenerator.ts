@@ -51,6 +51,16 @@ export class NetherWorldGenerator implements WorldGenerator {
             // Air cavity or Lava Ocean
             if (y <= lavaSeaY) {
               ctx.setBlock(x, y, z, BlockType.Lava);
+            } else {
+              // Surface vegetation on nether floor: Crimson & Warped Fungus
+              const below = ctx.getBlock(x, y - 1, z);
+              if (below === BlockType.Ash || below === BlockType.Basalt) {
+                const vegNoise = ctx.simplex.noise((x + 123) / 6, (z + 456) / 6);
+                if (vegNoise > 0.60) {
+                  const subType = ctx.simplex.noise((x + 789) / 8, (z + 101) / 8);
+                  ctx.setBlock(x, y, z, subType > 0 ? BlockType.CrimsonFungus : BlockType.WarpedFungus);
+                }
+              }
             }
           }
         }

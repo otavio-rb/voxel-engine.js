@@ -10,8 +10,7 @@ runEngineWorker({
   world: { initialDimension: 'overworld' },
   spawnPoint: { x: 0, y: 40, z: 0 },
   hotbar: [
-    BlockType.Grass, BlockType.Stone, BlockType.Dirt, BlockType.Sand, BlockType.Snow,
-    BlockType.Wood, BlockType.Leaves, BlockType.Coal, BlockType.Water, BlockType.Lava,
-    BlockType.Magma, BlockType.Basalt, BlockType.Ash, BlockType.Obsidian
+    BlockType.Grass, BlockType.Stone, BlockType.Moss, BlockType.Wood, BlockType.Leaves,
+    BlockType.VictoriaRegia, BlockType.SporeBlossom, BlockType.CaveFlower, BlockType.BigDripleaf
   ]
 });

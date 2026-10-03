@@ -46,6 +46,44 @@ export enum BlockType {
   JungleLeaves = 38,
   Cactus = 39,
   Clay = 40,
+
+  // ── Underground: estratos, biomas cavernosos e estruturas ──
+  Deepslate = 41,
+  Tuff = 42,
+  Dripstone = 43,
+  Gravel = 44,
+  Moss = 45,
+  GlowLichen = 46,
+  CaveVine = 47,
+  GlowBerries = 48,
+  Mycelium = 49,
+  MushroomStem = 50,
+  RedMushroomCap = 51,
+  BrownMushroomCap = 52,
+  Glowshroom = 53,
+  Amethyst = 54,
+  AmethystCluster = 55,
+  Calcite = 56,
+  SmoothBasalt = 57,
+
+  // ── Flora e Vegetação de Superfície e Subsolo (Micro-voxels 3D) ──
+  TallGrass = 58,
+  RedFlower = 59,
+  YellowFlower = 60,
+  RedMushroom = 61,
+  BrownMushroom = 62,
+  VioletGlowshroom = 63,
+  CrimsonFungus = 64,
+  WarpedFungus = 65,
+  GoldenMushroom = 66,
+  ShelfFungus = 67,
+
+  // ── Lush Caves Decorações Especiais (Micro-voxels 3D) ─────────
+  VictoriaRegia = 68,
+  SporeBlossom = 69,
+  CaveFlower = 70,
+  HangingRoots = 71,
+  BigDripleaf = 72,
 }
 
 export function registerBlocks(): void {
@@ -94,4 +132,42 @@ export function registerBlocks(): void {
   blockRegistry.register({ id: 38, name: 'jungle_leaves', color: 0x00c853, solid: true, opaque: false, transparent: true });
   blockRegistry.register({ id: 39, name: 'cactus', color: 0x388e3c, solid: true, opaque: true });
   blockRegistry.register({ id: 40, name: 'clay', color: 0x90a4ae, solid: true, opaque: true });
+
+  // ── Underground: estratos, biomas cavernosos e estruturas ──
+  blockRegistry.register({ id: 41, name: 'deepslate', color: 0x4b4b55, solid: true, opaque: true });
+  blockRegistry.register({ id: 42, name: 'tuff', color: 0x6b6d62, solid: true, opaque: true });
+  blockRegistry.register({ id: 43, name: 'dripstone', color: 0x9a7f6c, solid: true, opaque: true });
+  blockRegistry.register({ id: 44, name: 'gravel', color: 0x7e7a75, solid: true, opaque: true });
+  blockRegistry.register({ id: 45, name: 'moss', color: 0x4f7a2a, solid: true, opaque: true });
+  blockRegistry.register({ id: 46, name: 'glow_lichen', color: 0x7fe3a0, meshType: 'microvoxel', luminance: 0.5 });
+  blockRegistry.register({ id: 47, name: 'cave_vine', color: 0x4e7a2e, meshType: 'microvoxel' });
+  blockRegistry.register({ id: 48, name: 'glow_berries', color: 0xffb732, meshType: 'microvoxel', luminance: 0.95 });
+  blockRegistry.register({ id: 49, name: 'mycelium', color: 0x6f5f73, solid: true, opaque: true });
+  blockRegistry.register({ id: 50, name: 'mushroom_stem', color: 0xd8d2c4, solid: true, opaque: true });
+  blockRegistry.register({ id: 51, name: 'red_mushroom_cap', color: 0xb5342a, solid: true, opaque: true, luminance: 0.65 });
+  blockRegistry.register({ id: 52, name: 'brown_mushroom_cap', color: 0x8a6240, solid: true, opaque: true, luminance: 0.65 });
+  blockRegistry.register({ id: 53, name: 'glowshroom', color: 0x58e0d0, meshType: 'microvoxel', luminance: 0.90 });
+  blockRegistry.register({ id: 54, name: 'amethyst', color: 0x9b6fd4, solid: true, opaque: true, luminance: 0.20 });
+  blockRegistry.register({ id: 55, name: 'amethyst_cluster', color: 0xc9a6ff, meshType: 'microvoxel', luminance: 0.75 });
+  blockRegistry.register({ id: 56, name: 'calcite', color: 0xe8e6df, solid: true, opaque: true });
+  blockRegistry.register({ id: 57, name: 'smooth_basalt', color: 0x3a3a42, solid: true, opaque: true });
+
+  // ── Flora e Vegetação de Superfície e Subsolo (Micro-voxels 3D) ──
+  blockRegistry.register({ id: 58, name: 'tall_grass', color: 0x55aa28, meshType: 'microvoxel' });
+  blockRegistry.register({ id: 59, name: 'red_flower', color: 0xe53935, meshType: 'microvoxel' });
+  blockRegistry.register({ id: 60, name: 'yellow_flower', color: 0xfdd835, meshType: 'microvoxel' });
+  blockRegistry.register({ id: 61, name: 'red_mushroom', color: 0xd32f2f, meshType: 'microvoxel', luminance: 0.45 });
+  blockRegistry.register({ id: 62, name: 'brown_mushroom', color: 0x8d6e63, meshType: 'microvoxel', luminance: 0.55 });
+  blockRegistry.register({ id: 63, name: 'violet_glowshroom', color: 0x9333ea, meshType: 'microvoxel', luminance: 0.90 });
+  blockRegistry.register({ id: 64, name: 'crimson_fungus', color: 0xdc2626, meshType: 'microvoxel', luminance: 0.70 });
+  blockRegistry.register({ id: 65, name: 'warped_fungus', color: 0x0d9488, meshType: 'microvoxel', luminance: 0.80 });
+  blockRegistry.register({ id: 66, name: 'golden_mushroom', color: 0xf59e0b, meshType: 'microvoxel', luminance: 1.00 });
+  blockRegistry.register({ id: 67, name: 'shelf_fungus', color: 0x795548, meshType: 'microvoxel', luminance: 0.45 });
+
+  // ── Lush Caves Flora & Decorações (Micro-voxels 3D) ───────────
+  blockRegistry.register({ id: 68, name: 'victoria_regia', color: 0x2e7d32, meshType: 'microvoxel', luminance: 0.50 });
+  blockRegistry.register({ id: 69, name: 'spore_blossom', color: 0xe91e63, meshType: 'microvoxel', luminance: 0.90 });
+  blockRegistry.register({ id: 70, name: 'cave_flower', color: 0xf06292, meshType: 'microvoxel', luminance: 0.55 });
+  blockRegistry.register({ id: 71, name: 'hanging_roots', color: 0x795548, meshType: 'microvoxel' });
+  blockRegistry.register({ id: 72, name: 'big_dripleaf', color: 0x388e3c, meshType: 'microvoxel' });
 }

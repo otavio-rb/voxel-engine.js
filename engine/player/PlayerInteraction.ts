@@ -30,8 +30,13 @@ export default class PlayerInteraction {
   /** Block IDs bound to the number keys / mouse wheel, in slot order. */
   public setHotbar(types: number[]): void {
     this.hotbarTypes = [...types];
-    this.currentSlotIndex = 0;
-    if (types.length > 0) this.selectedBlockType = types[0];
+    if (this.currentSlotIndex >= this.hotbarTypes.length) {
+      this.currentSlotIndex = Math.max(0, this.hotbarTypes.length - 1);
+    }
+    if (this.hotbarTypes.length > 0) {
+      this.selectedBlockType = this.hotbarTypes[this.currentSlotIndex];
+      if (this.onSelectionChange) this.onSelectionChange(this.selectedBlockType);
+    }
   }
 
   public selectSlot(idx: number): void {
@@ -65,12 +70,6 @@ export default class PlayerInteraction {
   public onKeyDown(key: string): void {
     if (key >= '1' && key <= '9') {
       this.selectSlot(parseInt(key, 10) - 1);
-    } else if (key === '0') {
-      this.selectSlot(9);
-    } else if (key === '-' || key === '_') {
-      this.selectSlot(10);
-    } else if (key === '=' || key === '+') {
-      this.selectSlot(11);
     }
   }
 

@@ -1,65 +1,16 @@
 import type { ChunkContext, WorldGenerator } from '@voxel/engine/chunk-worker';
 import { BlockType } from '../blocks';
+import { CaveCarver } from './caves';
+import {
+  GLOBAL_HEIGHT,
+  SEA_LEVEL,
+  getVolcanoInCell,
+  surfaceHeightAt,
+  type OverworldBiome,
+  type VolcanoInfo,
+} from './overworldShape';
 
-export interface VolcanoInfo {
-  x: number;
-  z: number;
-  radius: number;
-  height: number;
-  craterR: number;
-  craterDepth: number;
-  exists: boolean;
-}
-
-export type OverworldBiome =
-  | 'plains'
-  | 'forest'
-  | 'birch'
-  | 'taiga'
-  | 'cherry'
-  | 'desert'
-  | 'jungle'
-  | 'snow_tundra'
-  | 'volcanic';
-
-/**
- * Large-scale cell grid for volcanoes (640x640 blocks).
- * Volcanoes are rare, epic geological landmarks rather than cluttering every turn.
- */
-export function getVolcanoInCell(cellX: number, cellZ: number): VolcanoInfo {
-  const cellGrid = 640;
-
-  // Epic volcano landmark at cell (1, 1) around (720, 720)
-  if (cellX === 1 && cellZ === 1) {
-    return {
-      x: cellX * cellGrid + 120,
-      z: cellZ * cellGrid + 120,
-      radius: 68,
-      height: 66,
-      craterR: 14,
-      craterDepth: 18,
-      exists: true,
-    };
-  }
-
-  const h1 = Math.sin(cellX * 127.1 + cellZ * 311.7) * 43758.5453123;
-  const r1 = h1 - Math.floor(h1);
-  const h2 = Math.sin((cellX + 43.1) * 269.5 + (cellZ + 17.3) * 183.3) * 43758.5453123;
-  const r2 = h2 - Math.floor(h2);
-  const h3 = Math.sin((cellX + 91.7) * 419.2 + (cellZ + 53.9) * 371.1) * 43758.5453123;
-  const r3 = h3 - Math.floor(h3);
-
-  // ~25% of 640x640 cells contain a volcano
-  const exists = r3 > 0.75;
-  const x = cellX * cellGrid + 80 + Math.floor(r1 * (cellGrid - 160));
-  const z = cellZ * cellGrid + 80 + Math.floor(r2 * (cellGrid - 160));
-  const radius = 54 + Math.floor(r1 * 18);
-  const height = 54 + Math.floor(r2 * 22);
-  const craterR = 12 + Math.floor(r3 * 4);
-  const craterDepth = 16;
-
-  return { x, z, radius, height, craterR, craterDepth, exists };
-}
+export { getVolcanoInCell, type OverworldBiome, type VolcanoInfo };
 
 /**
  * Macro Climate Classification:
@@ -86,9 +37,9 @@ export function getBiomeAt(
   const moisture = simplex.noise((x - 25000) / 1050, (z + 35000) / 1050) +
                    simplex.noise((x - 25000) / 520, (z + 35000) / 520) * 0.2;
 
-  // Mountain peaks capped with snow
-  if (sy > globalHeight * 0.74) {
-    return { biome: 'snow_tundra', temp, moisture };
+  // Mountain peaks and high terrain
+  if (sy >= 72) {
+    return { biome: 'mountains', temp, moisture };
   }
 
   // Polar / Glacial freezing zone
@@ -134,8 +85,8 @@ export class StandardWorldGenerator implements WorldGenerator {
   public readonly id = 'standard';
 
   public generate(ctx: ChunkContext): void {
-    const globalHeight = 128;
-    const seaLevel = Math.floor(globalHeight * 0.25);
+    const globalHeight = GLOBAL_HEIGHT;
+    const seaLevel = SEA_LEVEL;
 
     if (ctx.startY > globalHeight + 25) return;
     if (ctx.endY <= -512) return;
@@ -156,10 +107,7 @@ export class StandardWorldGenerator implements WorldGenerator {
       const lx = x - ctx.startX;
       for (let z = ctx.startZ; z < ctx.endZ; z++) {
         const lz = z - ctx.startZ;
-        const contNoise = ctx.octaveBaseNoise(x, z, 5.0, 4);
-        const detailNoise = ctx.octaveBaseNoise(x + 500, z + 500, 0.6, 3);
-        let sy = Math.floor(globalHeight * (0.32 + 0.48 * (contNoise * 0.8 + detailNoise * 0.2)));
-        sy = Math.max(0, Math.min(sy, globalHeight));
+        let sy = surfaceHeightAt(ctx, x, z);
 
         // Evaluate nearby volcanoes
         let bestConeElev = 0;
@@ -291,6 +239,25 @@ export class StandardWorldGenerator implements WorldGenerator {
               } else {
                 type = BlockType.Stone;
               }
+            } else if (biome === 'mountains') {
+              // Mountain Strata: neve nos picos muito altos
+              const snowLine = 88;
+              if (sy >= snowLine) {
+                if (y >= sy - 2) {
+                  type = BlockType.Snow;
+                } else {
+                  type = BlockType.Stone;
+                }
+              } else {
+                const isRock = (sy >= 76) || (ctx.simplex.noise(x / 10, z / 10) > -0.15);
+                if (y === sy) {
+                  type = isRock ? BlockType.Stone : BlockType.Grass;
+                } else if (y >= sy - 2) {
+                  type = isRock ? BlockType.Stone : BlockType.Dirt;
+                } else {
+                  type = BlockType.Stone;
+                }
+              }
             } else {
               // Standard biomes (Plains, Forest, Birch, Taiga, Cherry, Jungle)
               const isBeach = sy <= seaLevel + 1;
@@ -303,8 +270,16 @@ export class StandardWorldGenerator implements WorldGenerator {
               }
             }
 
-            // Ores in deep stone
+            // Deep strata: a rocha escurece com a profundidade, com veios de tufo
             if (type === BlockType.Stone && y < sy - 8) {
+              const deepslateLine = -2 + ctx.simplex.noise3d(x / 30, 0, z / 30) * 5;
+              if (y < deepslateLine) {
+                type = BlockType.Deepslate;
+              } else if (ctx.simplex.noise3d(x / 26, y / 17, z / 26) > 0.55) {
+                type = BlockType.Tuff;
+              }
+
+              // Ores in deep stone
               const oreRand = ctx.simplex.noise3d(x / 3.5, y / 3.5, z / 3.5);
               if (oreRand > 0.82) type = BlockType.Coal;
               else if (oreRand < -0.86) type = BlockType.Iron;
@@ -318,45 +293,8 @@ export class StandardWorldGenerator implements WorldGenerator {
       }
     }
 
-    // ── Pass 2.5: Cave Carving ───────────────────────────────────────────────
-    for (let x = ctx.startX; x < ctx.endX; x++) {
-      const lx = x - ctx.startX;
-      for (let z = ctx.startZ; z < ctx.endZ; z++) {
-        const lz = z - ctx.startZ;
-        const sy = surfaceOf[colIdx(lx, lz)];
-        const flags = flagsOf[colIdx(lx, lz)];
-        const onCone = (flags & 8) !== 0;
-        const isCalderaLava = (flags & 2) !== 0;
-        const caveTop = onCone ? sy - 10 : sy - 4;
-
-        for (let y = ctx.startY; y < Math.min(ctx.endY, caveTop + 1); y++) {
-          const existing = ctx.getBlock(x, y, z);
-          if (existing < 0 || existing === BlockType.Water || existing === BlockType.Lava) continue;
-          if (isCalderaLava && y >= sy - 6) continue;
-
-          const depth = sy - y;
-          const depthF = Math.min(depth / 80.0, 1.0);
-          let carve = false;
-
-          const ts = 38;
-          const sA = ctx.simplex.noise3d(x / ts, y / ts, z / ts);
-          const sB = ctx.simplex.noise3d((x + 1337) / ts, (y + 1337) / ts, (z + 1337) / ts);
-          if (Math.abs(sA) + Math.abs(sB) < 0.24 + depthF * 0.10) carve = true;
-
-          if (carve) {
-            ctx.clearBlock(x, y, z);
-            if (depth > 25 && y < seaLevel) {
-              const floor = ctx.getBlock(x, y - 1, z);
-              if (floor > 0) {
-                const lavaRand = ctx.simplex.noise3d(x / 8, y / 8, z / 8);
-                if (lavaRand > 0.6) ctx.setBlock(x, y, z, BlockType.Lava);
-                else if (lavaRand > 0.4) ctx.setBlock(x, y - 1, z, BlockType.Magma);
-              }
-            }
-          }
-        }
-      }
-    }
+    // ── Pass 2.5: Caves, cave biomes & underground structures ────────────────
+    new CaveCarver(ctx).apply();
 
     // ── Pass 3: Trees & Flora (Multiple Tree Varieties per Biome) ────────────
     const grid = 10;
@@ -380,10 +318,7 @@ export class StandardWorldGenerator implements WorldGenerator {
         const tx = gx * grid + 2 + Math.floor(rPos * (grid - 4));
         const tz = gz * grid + 2 + Math.floor(seed * (grid - 4));
 
-        // Compute surface height at tree trunk location
-        const contN = ctx.octaveBaseNoise(tx, tz, 5.0, 4);
-        const detN = ctx.octaveBaseNoise(tx + 500, tz + 500, 0.6, 3);
-        let baseSY = Math.floor(globalHeight * (0.32 + 0.48 * (contN * 0.8 + detN * 0.2)));
+        const baseSY = surfaceHeightAt(ctx, tx, tz);
 
         // Check volcanic influence at tree pos
         let nearVolcano = false;
@@ -404,13 +339,19 @@ export class StandardWorldGenerator implements WorldGenerator {
         const isVolcanicTree = nearVolcano;
         const { biome } = getBiomeAt(tx, tz, baseSY, seaLevel, globalHeight, isVolcanicTree, ctx.simplex);
 
-        // Trees only generate above sea level
-        if (baseSY <= seaLevel + 1) continue;
+        // Trees only generate above sea level and not on snow peaks
+        if (baseSY <= seaLevel + 1 || baseSY >= 88) continue;
 
         // ── Dispatch per Biome ───────────────────────────────────────────────
         if (biome === 'volcanic') {
           if (!onCone && seed > 0.70) {
             this.buildCharredTrunk(ctx, tx, baseSY, tz, seed);
+          }
+        } else if (biome === 'mountains') {
+          // Pinheiros nas encostas das montanhas
+          if (seed > 0.65) {
+            const snowOnPine = baseSY >= 78;
+            this.buildPineTree(ctx, tx, baseSY, tz, seed, snowOnPine);
           }
         } else if (biome === 'desert') {
           // Cacti in the desert

@@ -27,6 +27,8 @@ export interface BlockConfig {
   slipperiness?: number;
   /** Behaves as empty space: never meshed, never collides. */
   air?: boolean;
+  /** 'cube' for standard 6-sided voxel blocks, or 'microvoxel'/'cross' for 3D micro-voxel models (plants, vines, mushrooms). */
+  meshType?: 'cube' | 'microvoxel' | 'cross';
 }
 
 export class BlockRegistry {
@@ -42,17 +44,26 @@ export class BlockRegistry {
   }
 
   public register(config: BlockConfig): void {
+    const isSpecial = config.meshType === 'microvoxel' || config.meshType === 'cross';
     const fullConfig: BlockConfig = {
-      solid: true,
-      opaque: true,
+      solid: isSpecial ? false : true,
+      opaque: isSpecial ? false : true,
       fluid: false,
       flows: false,
       swimmable: false,
-      transparent: false,
+      transparent: isSpecial ? true : false,
       air: false,
       luminance: 0,
+      meshType: 'cube',
       ...config
     };
+
+    if (isSpecial) {
+      if (config.solid === undefined) fullConfig.solid = false;
+      if (config.opaque === undefined) fullConfig.opaque = false;
+      if (config.transparent === undefined) fullConfig.transparent = true;
+      if (config.lightOpacity === undefined) fullConfig.lightOpacity = 0;
+    }
 
     this.blocks.set(fullConfig.id, fullConfig);
     this.nameToId.set(fullConfig.name.toLowerCase(), fullConfig.id);
@@ -129,6 +140,22 @@ export class BlockRegistry {
     if (id < 0) return true;
     const block = this.blocks.get(id);
     return block ? (block.transparent ?? false) : true;
+  }
+
+  public isMicrovoxel(id: number): boolean {
+    if (id < 0) return false;
+    const block = this.blocks.get(id);
+    return block ? block.meshType === 'microvoxel' || block.meshType === 'cross' : false;
+  }
+
+  public isCrossMesh(id: number): boolean {
+    return this.isMicrovoxel(id);
+  }
+
+  public isInteractable(id: number): boolean {
+    if (id < 0) return false;
+    const block = this.blocks.get(id);
+    return block ? !block.air && !block.fluid : false;
   }
 
   public getColor(id: number): number {

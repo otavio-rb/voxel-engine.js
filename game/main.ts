@@ -1,10 +1,12 @@
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 import { VoxelEngine, EngineStats, BlockBreakEvent, BlockPlaceEvent } from '@voxel/engine';
 import UI, { UIStats } from './ui/UI';
+import MobileControls from './ui/MobileControls';
 import { WorldType } from './types';
+import { registerBlocks } from './content/blocks';
 
 const WORLD_DESCRIPTIONS: Record<string, string> = {
-  [WorldType.Standard]: 'Mundo padrão: Vastas florestas (carvalho, bétula, pinheiros, cerejeiras, selva), desertos com cactos e tundras com biomas em macro-escala.',
+  [WorldType.Standard]: 'Mundo padrão: Vastas florestas (carvalho, bétula, pinheiros, cerejeiras, selva), desertos com cactos e tundras com biomas em macro-escala. Por baixo, cavernas em camadas: rocha nua à superfície e, à medida que se desce, carso calcário, grutas verdejantes, florestas fúngicas, veios de cristal com geodos de ametista e, no fundo, o abismo de lava. Ravinas, poços e salões com lagos ligam tudo.',
   [WorldType.Aether]: 'The Aether (Portal do Céu): Ilhas celestiais flutuantes, nuvens aercloud, minérios de gravidade (Gravitite, Zanite, Ambrosium) e templos dourados.',
   [WorldType.Nether]: 'O Nether (Submundo): Dimensão subterrânea cavernosa com oceanos de lava e teto de rocha.',
   [WorldType.AstralVoid]: 'Vácuo Astral: Ilhas cósmicas flutuando num abismo estelar com microgravidade.',
@@ -18,6 +20,7 @@ const WORLD_DESCRIPTIONS: Record<string, string> = {
 class Game {
   private readonly engine: VoxelEngine;
   private readonly ui: UI;
+  private readonly mobileControls: MobileControls;
   private readonly stats: Stats;
 
   private isMenuOpen = true;
@@ -26,6 +29,7 @@ class Game {
   private shadersEnabled = true;
 
   constructor() {
+    registerBlocks();
     this.ui = new UI();
     this.stats = new Stats();
     this.stats.dom.id = 'stats-overlay';
@@ -38,15 +42,26 @@ class Game {
     });
     this.engine.setInputBlocked(true);
 
+    this.mobileControls = new MobileControls({
+      engine: this.engine,
+      ui: this.ui,
+      onOpenMenu: () => this.openMenu()
+    });
+
     this.bindEngineEvents();
     this.bindUIEvents();
     this.initMenu();
   }
 
   public openMenu(): void {
+    if (this.isMenuOpen) return;
+    if (this.ui.isInventoryOpen) {
+      this.ui.toggleInventory(false);
+    }
     this.isMenuOpen = true;
     this.engine.setInputBlocked(true);
     this.engine.unlockPointer();
+    this.mobileControls.setVisible(false);
 
     const menuEl = document.getElementById('world-menu');
     if (!menuEl) return;
@@ -70,6 +85,9 @@ class Game {
   public closeMenu(): void {
     this.isMenuOpen = false;
     this.engine.setInputBlocked(this.ui.isChatOpen);
+    if (!this.ui.isChatOpen) {
+      this.mobileControls.setVisible(true);
+    }
     const menuEl = document.getElementById('world-menu');
     if (menuEl) {
       menuEl.classList.add('hidden');
@@ -87,6 +105,8 @@ class Game {
       mode: this.selectedMode === 'debug' ? 'creative' : 'survival',
       shaders: this.shadersEnabled
     });
+
+    this.mobileControls.setVisible(true);
   }
 
   public resumeGame(): void {
@@ -150,7 +170,15 @@ class Game {
       }
     });
 
-    this.engine.on<{ type: string; origin: any; target: any; radius: number }>('beam:fired', ({ type, radius }) => {
+    this.engine.on('beam:charging_start', () => {
+      this.playKamehamehaChargeSound();
+    });
+
+    this.engine.on('beam:charging_stop', () => {
+      this.stopKamehamehaChargeSound();
+    });
+
+    this.engine.on<{ type: string; origin: any; target: any; radius: number; charge?: number }>('beam:fired', ({ type, radius, charge }) => {
       if (type === 'lightning') {
         this.playLightningSound();
       } else if (type === 'laser') {
@@ -158,6 +186,8 @@ class Game {
       } else if (type === 'orbital') {
         this.playLightningSound();
         this.playExplosionSound(radius ?? 12);
+      } else if (type === 'kamehameha') {
+        this.playKamehamehaSound(charge ?? 1.0);
       }
     });
 
@@ -169,13 +199,9 @@ class Game {
       // Evento de bloco colocado disparado pela engine
     });
 
-    this.engine.on<{ progress: number; targetDimId: string; colorHex: number }>('portal:absorption', ({ progress }) => {
-      this.updatePortalAbsorption(progress);
-    });
-
     this.engine.on<{ isLocked: boolean; wasLocked: boolean }>('lock_change', ({ isLocked, wasLocked }) => {
       if (wasLocked && !isLocked) {
-        if (!this.ui.isChatOpen && this.engine.hasStarted()) {
+        if (!this.ui.isChatOpen && !this.ui.isInventoryOpen && this.engine.hasStarted() && !this.isMenuOpen) {
           this.openMenu();
         }
       }
@@ -433,6 +459,157 @@ class Game {
     }
   }
 
+  private chargeAudioNodes: {
+    osc: OscillatorNode;
+    gain: GainNode;
+    lfo: OscillatorNode;
+    lfoGain: GainNode;
+  } | null = null;
+
+  private playKamehamehaChargeSound(): void {
+    try {
+      this.stopKamehamehaChargeSound();
+      const ctx = this.getAudioContext();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+
+      // Drone e subida contínua de pitch de Ki
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(95, now);
+      osc.frequency.exponentialRampToValueAtTime(580, now + 3.0);
+
+      // LFO para modulação trêmula de energia (14 Hz aumentando para 26 Hz)
+      lfo.type = 'sine';
+      lfo.frequency.setValueAtTime(14, now);
+      lfo.frequency.linearRampToValueAtTime(26, now + 3.0);
+      lfoGain.gain.setValueAtTime(0.12, now);
+
+      lfo.connect(gain.gain);
+      gain.gain.setValueAtTime(0.01, now);
+      gain.gain.linearRampToValueAtTime(0.28, now + 0.4);
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(350, now);
+      filter.frequency.exponentialRampToValueAtTime(1200, now + 3.0);
+      filter.Q.value = 3.5;
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      lfo.start(now);
+
+      this.chargeAudioNodes = { osc, gain, lfo, lfoGain };
+    } catch {
+      // Audio error ignored
+    }
+  }
+
+  private stopKamehamehaChargeSound(): void {
+    if (!this.chargeAudioNodes) return;
+    try {
+      const ctx = this.getAudioContext();
+      if (ctx) {
+        const now = ctx.currentTime;
+        this.chargeAudioNodes.gain.gain.linearRampToValueAtTime(0.001, now + 0.05);
+        this.chargeAudioNodes.osc.stop(now + 0.06);
+        this.chargeAudioNodes.lfo.stop(now + 0.06);
+      }
+    } catch {
+      // Audio error ignored
+    }
+    this.chargeAudioNodes = null;
+  }
+
+  private playKamehamehaSound(charge = 1.0): void {
+    try {
+      const ctx = this.getAudioContext();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const power = Math.max(0.3, Math.min(2.0, charge));
+
+      // 1. Rugido do Feixe de Plasma Ki (Sawtooth + Filtro Bandpass)
+      const beamDuration = 1.0 + power * 1.0;
+      const beamOsc = ctx.createOscillator();
+      const beamFilter = ctx.createBiquadFilter();
+      const beamGain = ctx.createGain();
+
+      beamOsc.type = 'sawtooth';
+      beamOsc.frequency.setValueAtTime(110 + power * 35, now);
+      beamOsc.frequency.exponentialRampToValueAtTime(50, now + beamDuration);
+
+      beamFilter.type = 'bandpass';
+      beamFilter.frequency.setValueAtTime(800 + power * 350, now);
+      beamFilter.frequency.exponentialRampToValueAtTime(280, now + beamDuration * 0.9);
+      beamFilter.Q.value = 4.0;
+
+      beamGain.gain.setValueAtTime(0.001, now);
+      beamGain.gain.linearRampToValueAtTime(Math.min(0.65, 0.35 * power + 0.15), now + 0.06);
+      beamGain.gain.setValueAtTime(0.35 * power, now + beamDuration * 0.5);
+      beamGain.gain.exponentialRampToValueAtTime(0.001, now + beamDuration);
+
+      beamOsc.connect(beamFilter);
+      beamFilter.connect(beamGain);
+      beamGain.connect(ctx.destination);
+
+      beamOsc.start(now);
+      beamOsc.stop(now + beamDuration + 0.05);
+
+      // 2. Sub-bass estrondoso proporcional à carga
+      const subOsc = ctx.createOscillator();
+      const subGain = ctx.createGain();
+      subOsc.type = 'triangle';
+      subOsc.frequency.setValueAtTime(65 + power * 20, now);
+      subOsc.frequency.exponentialRampToValueAtTime(24, now + beamDuration * 1.1);
+
+      subGain.gain.setValueAtTime(0.001, now);
+      subGain.gain.linearRampToValueAtTime(Math.min(0.7, 0.4 * power + 0.1), now + 0.05);
+      subGain.gain.exponentialRampToValueAtTime(0.001, now + beamDuration * 1.1);
+
+      subOsc.connect(subGain);
+      subGain.connect(ctx.destination);
+
+      subOsc.start(now);
+      subOsc.stop(now + beamDuration * 1.15);
+
+      // 3. Ruído branco filtrado (varredura sônica de pressão de ar)
+      const bufferSize = Math.floor(ctx.sampleRate * Math.min(2.0, beamDuration));
+      const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const output = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+      const whiteNoise = ctx.createBufferSource();
+      whiteNoise.buffer = noiseBuffer;
+
+      const noiseFilter = ctx.createBiquadFilter();
+      noiseFilter.type = 'lowpass';
+      noiseFilter.frequency.setValueAtTime(1600 * power, now);
+      noiseFilter.frequency.exponentialRampToValueAtTime(180, now + beamDuration * 0.9);
+
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.001, now);
+      noiseGain.gain.linearRampToValueAtTime(0.25 * power, now + 0.08);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + beamDuration);
+
+      whiteNoise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(ctx.destination);
+
+      whiteNoise.start(now);
+      whiteNoise.stop(now + beamDuration + 0.05);
+    } catch {
+      // Audio error ignored
+    }
+  }
+
   private playNuclearSound(): void {
     try {
       const ctx = this.getAudioContext();
@@ -494,62 +671,24 @@ class Game {
     }, 70);
   }
 
-  private portalOsc: OscillatorNode | null = null;
-  private portalGain: GainNode | null = null;
-  private portalFilter: BiquadFilterNode | null = null;
-
-  private playPortalSuctionSound(progress: number): void {
-    try {
-      const ctx = this.getAudioContext();
-      if (!ctx) return;
-
-      if (!this.portalOsc) {
-        this.portalOsc = ctx.createOscillator();
-        this.portalGain = ctx.createGain();
-        this.portalFilter = ctx.createBiquadFilter();
-
-        this.portalOsc.type = 'sawtooth';
-        this.portalFilter.type = 'lowpass';
-        this.portalFilter.Q.value = 6.0;
-
-        this.portalGain.gain.setValueAtTime(0.001, ctx.currentTime);
-        this.portalOsc.connect(this.portalFilter);
-        this.portalFilter.connect(this.portalGain);
-        this.portalGain.connect(ctx.destination);
-        this.portalOsc.start();
-      }
-
-      const now = ctx.currentTime;
-      const freq = 65 + Math.pow(progress, 2.0) * 380;
-      const cutoff = 180 + Math.pow(progress, 1.8) * 2400;
-      const vol = Math.min(0.55, progress * 0.55);
-
-      this.portalOsc.frequency.setTargetAtTime(freq, now, 0.05);
-      this.portalFilter!.frequency.setTargetAtTime(cutoff, now, 0.05);
-      this.portalGain!.gain.setTargetAtTime(vol, now, 0.05);
-    } catch {
-      // Audio error ignored
-    }
-  }
-
-  private stopPortalSuctionSound(): void {
-    if (this.portalGain && this.audioCtx) {
-      this.portalGain.gain.setTargetAtTime(0.0001, this.audioCtx.currentTime, 0.08);
-    }
-  }
-
-  /** The visuals are the PortalWarp shader in the engine worker; here only the sound follows. */
-  private updatePortalAbsorption(progress: number): void {
-    if (progress <= 0.01) this.stopPortalSuctionSound();
-    else this.playPortalSuctionSound(progress);
-  }
-
   private bindUIEvents(): void {
     // Teclado global de atalhos do jogo/menu
     document.addEventListener('keydown', (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === 'INPUT') return;
 
+      if (e.key.toLowerCase() === 'e') {
+        if (this.isMenuOpen || this.ui.isChatOpen) return;
+        e.preventDefault();
+        this.ui.toggleInventory();
+        return;
+      }
+
       if (e.key === 'Escape') {
+        if (this.ui.isInventoryOpen) {
+          e.preventDefault();
+          this.ui.toggleInventory(false);
+          return;
+        }
         if (this.isMenuOpen) {
           if (this.engine.hasStarted()) {
             e.preventDefault();
@@ -563,21 +702,38 @@ class Game {
       }
 
       if (e.key.toLowerCase() === ';') {
-        if (this.isMenuOpen) return;
+        if (this.isMenuOpen || this.ui.isInventoryOpen) return;
         e.preventDefault();
         this.ui.toggleChat();
       }
     });
 
     this.ui.onToggle = (isOpen: boolean) => {
-      this.engine.setInputBlocked(isOpen || this.isMenuOpen);
+      this.engine.setInputBlocked(isOpen || this.isMenuOpen || this.ui.isInventoryOpen);
+      this.mobileControls.setVisible(!isOpen && !this.isMenuOpen && !this.ui.isInventoryOpen);
       if (isOpen) {
         this.engine.unlockPointer();
       } else {
-        if (!this.isMenuOpen && this.engine.hasStarted()) {
+        if (!this.isMenuOpen && !this.ui.isInventoryOpen && this.engine.hasStarted()) {
           this.engine.lockPointer();
         }
       }
+    };
+
+    this.ui.onToggleInventory = (isOpen: boolean) => {
+      this.engine.setInputBlocked(isOpen || this.isMenuOpen || this.ui.isChatOpen);
+      this.mobileControls.setVisible(!isOpen && !this.isMenuOpen && !this.ui.isChatOpen);
+      if (isOpen) {
+        this.engine.unlockPointer();
+      } else {
+        if (!this.isMenuOpen && !this.ui.isChatOpen && this.engine.hasStarted()) {
+          this.engine.lockPointer();
+        }
+      }
+    };
+
+    this.ui.onUpdateHotbar = (types: number[]) => {
+      this.engine.setHotbar(types);
     };
 
     this.ui.onOpenMenu = () => {
