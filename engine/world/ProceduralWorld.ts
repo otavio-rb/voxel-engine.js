@@ -146,6 +146,10 @@ export default class ProceduralWorld extends Group {
   private readonly waterMaterial: ShaderMaterial;
   private wireframeEnabled = false;
   private readonly sky: Sky;
+  private weatherFogNear: number | null = null;
+  private weatherFogFar: number | null = null;
+  private weatherFogColor: Color | null = null;
+  private stormChoppiness = 0.0;
 
   // ─── Water Simulation (Scalar Field) ──────────────────────────────────────
   private readonly activeWaterChunks = new Set<string>();
@@ -262,14 +266,21 @@ export default class ProceduralWorld extends Group {
         uniform float uTime;
         varying vec3 vNormal;
         varying vec3 vColor;
+        varying vec2 vUv;
         varying vec3 vWorldPos;
         varying float vAo;
         ${VOXEL_SHADING_GLSL}
 
         void main() {
           float aoMultiplier = 0.2 + 0.8 * vAo;
+          float emissive = vUv.x;
+
           if (uShadersEnabled < 0.5) {
-            gl_FragColor = vec4(vColor * aoMultiplier * voxelLight(vec3(0.0, 1.0, 0.0), 0.0), 1.0);
+            vec3 lit = vColor * aoMultiplier * voxelLight(vec3(0.0, 1.0, 0.0), 0.0);
+            if (emissive > 0.05) {
+              lit = max(lit, vColor * (1.1 + 0.45 * emissive));
+            }
+            gl_FragColor = vec4(applyFog(lit, vWorldPos), 1.0);
             return;
           }
 
@@ -286,6 +297,13 @@ export default class ProceduralWorld extends Group {
           if (vColor.r > 0.7 && vColor.b < 0.15 && vColor.g > 0.15 && vColor.g < 0.35) {
             float heatGlow = 0.45 + 0.25 * sin(uTime * 3.0 + vWorldPos.x * 2.0 + vWorldPos.y * 2.0 + vWorldPos.z * 2.0);
             lighting = max(lighting, albedo * (1.1 + heatGlow));
+          }
+
+          // Autoiluminação / Emissão bioluminescente (cogumelos, flores, bagas, cristais, chapéus gigantes)
+          if (emissive > 0.05) {
+            float glowPulse = 1.0 + 0.08 * sin(uTime * 2.6 + vWorldPos.x * 2.5 + vWorldPos.y * 2.5 + vWorldPos.z * 2.5);
+            vec3 selfGlow = albedo * (1.15 + 0.5 * emissive) * glowPulse;
+            lighting = max(lighting, selfGlow);
           }
 
           gl_FragColor = vec4(applyFog(lighting, vWorldPos), 1.0);
@@ -305,6 +323,7 @@ export default class ProceduralWorld extends Group {
         uDaylight:       { value: 1.0 },
         uMinLight:       { value: 0.03 },
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
+        uStormChoppiness: { value: 0.0 },
       },
       vertexShader: `
         attribute float creationTime;
@@ -316,6 +335,7 @@ export default class ProceduralWorld extends Group {
         varying float vAo;
         varying vec2 vLight;
         uniform float uTime;
+        uniform float uStormChoppiness;
 
         void main() {
           vNormal = normal;
@@ -335,8 +355,8 @@ export default class ProceduralWorld extends Group {
           
           // Use world coordinates so waves align across chunk borders (lava moves slower and thicker)
           bool isLava = (vColor.r > 0.6 && vColor.b < 0.2);
-          float waveSpeed = isLava ? 0.8 : 1.6;
-          float waveAmp = isLava ? 0.03 : 0.045;
+          float waveSpeed = isLava ? 0.8 : (1.6 + uStormChoppiness * 2.2);
+          float waveAmp = isLava ? 0.03 : (0.045 + uStormChoppiness * 0.16);
           float wave = sin(uTime * waveSpeed + vWorldPos.x * 0.5) + cos(uTime * (waveSpeed * 0.75) + vWorldPos.z * 0.5);
           pos.y += wave * waveAmp;
           vWorldPos.y += wave * waveAmp;
@@ -608,11 +628,46 @@ export default class ProceduralWorld extends Group {
     dummy.geometry.dispose();
   }
 
+  public getSky(): Sky {
+    return this.sky;
+  }
+
+  public getOpaqueMaterial(): ShaderMaterial {
+    return this.opaqueMaterial;
+  }
+
+  public getWaterMaterial(): ShaderMaterial {
+    return this.waterMaterial;
+  }
+
+  public setWeatherFog(near: number | null, far: number | null, color: Color | null): void {
+    this.weatherFogNear = near;
+    this.weatherFogFar = far;
+    this.weatherFogColor = color;
+  }
+
+  public setStormChoppiness(amount: number): void {
+    this.stormChoppiness = Math.max(0, Math.min(1.0, amount));
+    if (this.waterMaterial.uniforms.uStormChoppiness) {
+      this.waterMaterial.uniforms.uStormChoppiness.value = this.stormChoppiness;
+    }
+  }
+
   tick(delta: number = 16.6667): void {
     [this.opaqueMaterial, this.waterMaterial].forEach(mat => {
         mat.uniforms.uTime.value = this.elapsedTime;
         if (!this.isUnderwater) {
-          mat.uniforms.uSkyColor.value.copy(this.sky.ambient.color);
+          if (this.weatherFogColor) {
+            mat.uniforms.uSkyColor.value.copy(this.weatherFogColor);
+          } else {
+            mat.uniforms.uSkyColor.value.copy(this.sky.ambient.color);
+          }
+        }
+        if (this.weatherFogNear !== null) {
+          mat.uniforms.uFogNear.value = this.weatherFogNear;
+        }
+        if (this.weatherFogFar !== null) {
+          mat.uniforms.uFogFar.value = this.weatherFogFar;
         }
         mat.uniforms.uSunDirection.value.copy(this.sky.directional.position).normalize();
         mat.uniforms.uDaylight.value = this.sky.daylight;
@@ -775,6 +830,7 @@ export default class ProceduralWorld extends Group {
     geometry.setAttribute('color',        new BufferAttribute(data.colors,    3));
     geometry.setAttribute('ao',           new BufferAttribute(data.ao,        1));
     geometry.setAttribute('light',        new BufferAttribute(data.light,     2));
+    geometry.setAttribute('uv',           new BufferAttribute(data.uvs,       2));
 
     data.creationTime.fill(creationTime);
     geometry.setAttribute('creationTime', new BufferAttribute(data.creationTime, 1));

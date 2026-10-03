@@ -2,7 +2,7 @@ import { Color, PerspectiveCamera, ShaderMaterial, Vector3, Vector4 } from 'thre
 import type { ScreenPass } from '@voxel/engine/worker';
 
 /** Sources of each kind drawn per frame; the nearest ones win. */
-const MAX_FX = 4;
+const MAX_FX = 8;
 
 const vec4s = () => Array.from({ length: MAX_FX }, () => new Vector4());
 

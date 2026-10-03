@@ -28,6 +28,8 @@ export const effectsPlugin: EnginePlugin = {
 
     const beamManager = new BeamManager(scene);
     beamManager.onBeamFired = (info) => ctx.emitToMain('beam:fired', info);
+    beamManager.onChargingStart = () => ctx.emitToMain('beam:charging_start');
+    beamManager.onChargingStop = () => ctx.emitToMain('beam:charging_stop');
     beamManager.onChatMessage = (text) => chat(ctx, text);
 
     const celestialManager = new CelestialManager(scene);
@@ -133,13 +135,76 @@ export const effectsPlugin: EnginePlugin = {
         screenFx.addShock(blast.position, p * blast.radius * 5, blast.radius * 0.5, fade * 0.9, blast.radius * 1.6, fade * 0.7);
       }
 
+      // Efeito pós-processamento durante o carregamento de Ki nas mãos
+      if (beamManager.isCharging()) {
+        const ratio = beamManager.getChargingRatio();
+        const handPos = beamManager.getHandPosition(player);
+        screenFx.addGlare(handPos, 0.35 * (0.8 + ratio * 1.4), new Color(0.3, 0.85, 1.0), 0.7 * ratio);
+        screenFx.addFlash(new Color(0.04, 0.35, 0.65), 0.035 * ratio);
+        screenFx.addAberration(0.006 * ratio);
+      }
+
+      for (const beam of beamManager.getBeams()) {
+        if (beam.isDisposed) continue;
+        const p = beam.progress;
+        const fade = 1 - p;
+        const pulse = 0.85 + 0.15 * Math.sin(beam.elapsedTime * 40);
+
+        if (beam.type === 'kamehameha') {
+          // 1. Flash suave de atmosfera (não cega o jogador)
+          screenFx.addFlash(new Color(0.08, 0.55, 0.9), fade * 0.08 * pulse);
+
+          // 2. Glare focado nas mãos no canto inferior direito (livre da mira)
+          screenFx.addGlare(beam.origin, 0.45, new Color(0.65, 0.95, 1.0), fade * 0.8 * pulse);
+
+          // 3. Glare colossal no ponto de impacto à distância
+          screenFx.addGlare(beam.target, 5.0, new Color(0.0, 0.85, 1.0), fade * 2.2 * pulse);
+
+          // 4. Ponto médio do feixe
+          const midPoint = new Vector3().addVectors(beam.origin, beam.target).multiplyScalar(0.5);
+          screenFx.addGlare(midPoint, 2.8, new Color(0.15, 0.55, 0.9), fade * 0.8 * pulse);
+
+          // 5. Aberração cromática que vibra o espectro RGB
+          screenFx.addAberration(fade * 0.025 * pulse);
+
+          // 6. Onda de choque refratária de Ki se expandindo no ponto de impacto
+          const shockRadius = p * 20.0;
+          screenFx.addShock(beam.target, shockRadius, 1.4, fade * 1.5, 10.0, fade * 1.2);
+        } else if (beam.type === 'lightning') {
+          screenFx.addFlash(new Color(0.7, 0.9, 1.0), fade * fade * 0.4);
+          screenFx.addGlare(beam.target, 3.5, new Color(0.3, 0.8, 1.0), fade * 1.8);
+          screenFx.addAberration(fade * 0.02);
+        } else if (beam.type === 'laser') {
+          screenFx.addGlare(beam.origin, 1.8, new Color(1.0, 0.1, 0.3), fade * 1.2);
+          screenFx.addGlare(beam.target, 3.2, new Color(1.0, 0.2, 0.4), fade * 1.6);
+        } else if (beam.type === 'orbital') {
+          screenFx.addFlash(new Color(1.0, 0.95, 0.7), fade * 0.5);
+          screenFx.addGlare(beam.target, 6.0, new Color(1.0, 0.9, 0.5), fade * 2.5);
+          screenFx.addAberration(fade * 0.03);
+        }
+      }
+
       screenFx.end();
     });
 
-    // Atalho: 'r' solta um raio divino onde o jogador estiver olhando
+    // Atalhos: 'r' solta raio divino; segurar 'k' carrega Ki e soltar dispara o Kamehameha
     ctx.on<string>('keydown', (key) => {
-      if (key?.toLowerCase() === 'r' && ctx.started) {
+      const lower = key?.toLowerCase();
+      if (lower === 'r' || key === 'KeyR') {
         beamManager.fireFromPlayer(player, world, explosionManager, 'lightning', 5.0);
+      } else if (lower === 'k' || key === 'KeyK') {
+        if (!beamManager.isCharging()) {
+          beamManager.startCharging(player);
+        }
+      }
+    });
+
+    ctx.on<string>('keyup', (key) => {
+      const lower = key?.toLowerCase();
+      if (lower === 'k' || key === 'KeyK') {
+        if (beamManager.isCharging()) {
+          beamManager.stopCharging(player, world, explosionManager);
+        }
       }
     });
 
@@ -179,13 +244,17 @@ export const effectsPlugin: EnginePlugin = {
       blackHoleManager.spawn({ position: spawnPos, radius, lifetime });
     });
 
-    const beamCommand = (type: 'lightning' | 'laser' | 'orbital', defaultRadius: number) => (args: string[]) => {
+    const beamCommand = (type: 'lightning' | 'laser' | 'orbital' | 'kamehameha', defaultRadius: number) => (args: string[]) => {
       const radius = args[0] ? parseFloat(args[0]) : defaultRadius;
       beamManager.fireFromPlayer(player, world, explosionManager, type, isNaN(radius) ? defaultRadius : radius);
     };
     commands.register(['/raio', '/lightning', '/beam'], beamCommand('lightning', 5.5));
     commands.register('/laser', beamCommand('laser', 4.5));
     commands.register('/orbital', beamCommand('orbital', 11.0));
+    commands.register(['/kamehameha', '/kame', '/ha'], (args) => {
+      const charge = args[0] ? parseFloat(args[0]) : 1.0;
+      beamManager.stopCharging(player, world, explosionManager, isNaN(charge) ? 1.0 : charge);
+    });
 
     commands.register(['/explode', '/boom'], (args) => {
       const radius = args[0] ? parseFloat(args[0]) : 6.0;

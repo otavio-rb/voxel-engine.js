@@ -47,6 +47,7 @@ export class VoxelEngine extends EventEmitter {
   private isLocking = false;
   private isStarted = false;
   private isInputBlocked = false;
+  private isMobileMode = false;
 
   private cleanupListeners: Array<() => void> = [];
 
@@ -72,6 +73,49 @@ export class VoxelEngine extends EventEmitter {
 
     this.setupWorkerMessaging();
     this.setupInputListeners();
+  }
+
+  public setMobileMode(enabled: boolean): void {
+    this.isMobileMode = enabled;
+    if (enabled && this.isStarted && !this.isInputBlocked) {
+      this.setMobileLocked(true);
+    }
+  }
+
+  public getMobileMode(): boolean {
+    return this.isMobileMode;
+  }
+
+  public setMobileLocked(locked: boolean): void {
+    const wasLocked = this.isLocked;
+    this.isLocked = locked;
+    this.worker.postMessage({ type: 'lock_state', payload: { isLocked: locked } });
+    if (wasLocked !== locked) {
+      this.emit('lock_change', { isLocked: locked, wasLocked });
+    }
+  }
+
+  public sendKeyDown(key: string): void {
+    if (this.isInputBlocked) return;
+    this.worker.postMessage({ type: 'keydown', payload: { key } });
+  }
+
+  public sendKeyUp(key: string): void {
+    if (this.isInputBlocked) return;
+    this.worker.postMessage({ type: 'keyup', payload: { key } });
+  }
+
+  public sendMouseMove(movementX: number, movementY: number): void {
+    if (!this.isLocked || this.isInputBlocked) return;
+    this.worker.postMessage({
+      type: 'mousemove',
+      payload: { movementX, movementY }
+    });
+  }
+
+  public sendMouseDown(button: number): void {
+    if (this.isInputBlocked) return;
+    this.worker.postMessage({ type: 'mousedown', payload: { button } });
   }
 
   public start(config?: {
@@ -100,6 +144,11 @@ export class VoxelEngine extends EventEmitter {
   }
 
   public async lockPointer(): Promise<void> {
+    if (this.isMobileMode) {
+      this.setMobileLocked(true);
+      return;
+    }
+
     if (this.isLocked || this.isLocking || this.isInputBlocked) {
       return;
     }
@@ -122,6 +171,11 @@ export class VoxelEngine extends EventEmitter {
   }
 
   public unlockPointer(): void {
+    if (this.isMobileMode) {
+      this.setMobileLocked(false);
+      return;
+    }
+
     if (document.pointerLockElement) {
       document.exitPointerLock();
     }
@@ -145,6 +199,10 @@ export class VoxelEngine extends EventEmitter {
 
   public selectSlot(index: number): void {
     this.worker.postMessage({ type: 'select_slot', payload: { index } });
+  }
+
+  public setHotbar(types: number[]): void {
+    this.worker.postMessage({ type: 'set_hotbar', payload: { types } });
   }
 
   public sendCommand(command: string, args: string[] = []): void {
@@ -261,6 +319,7 @@ export class VoxelEngine extends EventEmitter {
 
     // Pointer Lock change
     const onPointerLockChange = () => {
+      if (this.isMobileMode) return;
       const wasLocked = this.isLocked;
       this.isLocked = document.pointerLockElement === this.canvas;
       this.isLocking = false;
