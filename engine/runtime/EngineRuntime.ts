@@ -9,6 +9,7 @@ import { BlockPosition } from '../types';
 import { CommandRegistry } from './CommandRegistry';
 import { registerCoreCommands } from './coreCommands';
 import { PostProcessor } from '../render/PostProcessor';
+import { FrameProfiler } from '../core/FrameProfiler';
 
 /**
  * A slice of game logic that runs inside the engine worker.
@@ -256,15 +257,25 @@ function createContext(options: EngineWorkerOptions, init: InitPayload): EngineC
     plugin.setup(ctx);
   }
 
+  /**
+   * Mede a thread que REALMENTE renderiza.
+   *
+   * O indicador de FPS do jogo rodava na main thread, que so repassa input: o canvas vive aqui
+   * como OffscreenCanvas. Por isso "trava mas o FPS esta bom" — o numero vinha de uma thread
+   * ociosa. O resumo e enviado uma vez por segundo, nao por quadro.
+   */
+  const profiler = new FrameProfiler();
+  world.profiler = profiler;
+
   const targetTps = options.targetTps ?? 60;
   const loop = new GameLoop({
     targetTps,
     onFixedUpdate: (deltaMs, dtScale) => {
       if (!ctx.started) return;
-      player.update(deltaMs);
-      world.tick(deltaMs);
-      ctx.particles.update(deltaMs);
-      ctx.emit<FixedUpdateEvent>('fixedUpdate', { deltaMs, dtScale });
+      profiler.measure('jogador', () => player.update(deltaMs));
+      profiler.measure('mundo:tick', () => world.tick(deltaMs));
+      profiler.measure('particulas', () => ctx.particles.update(deltaMs));
+      profiler.measure('plugins:fixed', () => ctx.emit<FixedUpdateEvent>('fixedUpdate', { deltaMs, dtScale }));
     },
     onRender: (alpha, frameDeltaMs) => {
       if (ctx.started) {
@@ -276,9 +287,14 @@ function createContext(options: EngineWorkerOptions, init: InitPayload): EngineC
         player.applyViewEffects();
         ctx.emit('predraw');
       }
-      ctx.postProcessor.render(scene, camera);
+      profiler.measure('desenho', () => ctx.postProcessor.render(scene, camera));
       if (ctx.started) ctx.emit('postdraw');
       player.clearViewEffects();
+
+      const snapshot = profiler.frame(frameDeltaMs);
+      if (snapshot) {
+        self.postMessage({ type: 'event', event: 'engine:profile', payload: snapshot });
+      }
 
       if (ctx.started) {
         self.postMessage({
