@@ -10,6 +10,12 @@ interface PlayerOptions {
   camera: PerspectiveCamera;
   world: ProceduralWorld;
   mode?: PlayerMode;
+  /**
+   * Quantos voxels cabem em um bloco (um metro). 1 e o voxel classico; 8 significa
+   * minivoxels de 1/8 de bloco. O grid de voxels continua sendo a unidade da cena,
+   * entao o jogador e a fisica e que crescem nessa proporcao.
+   */
+  voxelsPerBlock?: number;
 }
 
 /**
@@ -60,6 +66,31 @@ export const MOVEMENT = {
   FLY_SPEED: 1.8
 } as const;
 
+export type MovementTable = { -readonly [K in keyof typeof MOVEMENT]: number };
+
+/** Grandezas de MOVEMENT que sao comprimentos (por tick) e portanto escalam com o voxel. */
+const MOVEMENT_LENGTHS = [
+  'GRAVITY', 'JUMP_VELOCITY', 'SPRINT_JUMP_BOOST', 'WALK_SPEED', 'AIR_ACCELERATION',
+  'SPRINT_AIR_ACCELERATION', 'MOMENTUM_THRESHOLD', 'FLUID_ACCELERATION', 'FLUID_SINK',
+  'FLUID_SWIM_UP', 'FLUID_JUMP_OUT', 'SNEAK_EYE_DROP', 'BOB_MAX', 'FLY_SPEED'
+] as const satisfies ReadonlyArray<keyof typeof MOVEMENT>;
+
+/**
+ * Reescala MOVEMENT para um mundo cujos voxels sao menores que um bloco.
+ *
+ * So comprimentos escalam. Arrastos, multiplicadores, suavizacoes e contagens de tick
+ * sao adimensionais e precisam ficar parados, senao a fisica do MC 1.8 deixa de valer.
+ * BOB_STRIDE e fase-por-comprimento, logo escala ao contrario, para que o balanco da
+ * caminhada mantenha a mesma frequencia visual.
+ */
+export function scaleMovement(voxelsPerBlock: number): MovementTable {
+  const table = { ...MOVEMENT } as MovementTable;
+  if (voxelsPerBlock === 1) return table;
+  for (const key of MOVEMENT_LENGTHS) table[key] = MOVEMENT[key] * voxelsPerBlock;
+  table.BOB_STRIDE = MOVEMENT.BOB_STRIDE / voxelsPerBlock;
+  return table;
+}
+
 /** `setGravity` keeps the engine's historical unit, where 0.008 means 1 G. */
 const GRAVITY_UNIT = 0.008;
 
@@ -73,7 +104,10 @@ export default class Player {
   public readonly body: KinematicBody;
 
   private readonly keys: Record<string, boolean> = {};
-  private readonly dimensions = { width: 0.6, height: 1.8, eyeHeight: 1.62 };
+  /** Voxels por bloco; 1 no voxel classico. Ver PlayerOptions.voxelsPerBlock. */
+  public readonly voxelsPerBlock: number;
+  private readonly mv: MovementTable;
+  private readonly dimensions: { width: number; height: number; eyeHeight: number };
   private canMove = true;
   private mode: PlayerMode;
   /** Velocity pushed by effects (black holes, explosions), in blocks per 60 Hz frame. */
@@ -112,7 +146,14 @@ export default class Player {
   private readonly baseQuaternion = new Quaternion();
   private viewEffectsApplied = false;
 
-  constructor({ camera, world, mode = 'debug' }: PlayerOptions) {
+  constructor({ camera, world, mode = 'debug', voxelsPerBlock = 1 }: PlayerOptions) {
+    this.voxelsPerBlock = voxelsPerBlock;
+    this.mv = scaleMovement(voxelsPerBlock);
+    this.dimensions = {
+      width:     0.6 * voxelsPerBlock,
+      height:    1.8 * voxelsPerBlock,
+      eyeHeight: 1.62 * voxelsPerBlock
+    };
     this.camera = camera;
     this.camera.rotation.order = 'YXZ';
     this.world = world;
@@ -124,10 +165,11 @@ export default class Player {
     this.body = new KinematicBody({
       dimensions: { width: this.dimensions.width, height: this.dimensions.height },
       eyeHeight: this.dimensions.eyeHeight,
-      gravity: GRAVITY_UNIT
+      gravity: GRAVITY_UNIT,
+      unitScale: voxelsPerBlock
     });
 
-    this.camera.position.set(2, 41.6, 2);
+    this.camera.position.set(2 * voxelsPerBlock, 41.6 * voxelsPerBlock, 2 * voxelsPerBlock);
     this.body.position.copy(this.camera.position);
     this.prevPosition.copy(this.body.position);
   }
@@ -198,14 +240,14 @@ export default class Player {
 
     // Duplo toque em W inicia o sprint
     if (k === 'w' && !isRepeat) {
-      if (this.tickCount - this.lastForwardTapTick <= MOVEMENT.DOUBLE_TAP_TICKS) {
+      if (this.tickCount - this.lastForwardTapTick <= this.mv.DOUBLE_TAP_TICKS) {
         this.sprintRequested = true;
       }
       this.lastForwardTapTick = this.tickCount;
     }
 
     if(k === ' ' && !isRepeat){
-      if (this.tickCount - this.lastForwardTapTick <= MOVEMENT.DOUBLE_TAP_TICKS) {
+      if (this.tickCount - this.lastForwardTapTick <= this.mv.DOUBLE_TAP_TICKS) {
         this.sprintRequested = true;
       }
     }
@@ -236,15 +278,15 @@ export default class Player {
 
     // Effects push in 60 Hz frame units: accumulate them as displacement for the next tick.
     const steps = deltaMs / EXTERNAL_STEP_MS;
-    this.pendingExternal.addScaledVector(this.externalVelocity, steps);
+    this.pendingExternal.addScaledVector(this.externalVelocity, steps * this.voxelsPerBlock);
     this.externalVelocity.multiplyScalar(Math.pow(0.9, steps));
     if (this.externalVelocity.lengthSq() < 0.00001) {
       this.externalVelocity.set(0, 0, 0);
     }
 
     this.tickAccumulator += deltaMs;
-    while (this.tickAccumulator >= MOVEMENT.TICK_MS) {
-      this.tickAccumulator -= MOVEMENT.TICK_MS;
+    while (this.tickAccumulator >= this.mv.TICK_MS) {
+      this.tickAccumulator -= this.mv.TICK_MS;
       this.prevPosition.copy(this.body.position);
       this.tick();
       this.pendingExternal.set(0, 0, 0);
@@ -256,16 +298,16 @@ export default class Player {
    * the last `update`, so motion stays smooth at any frame rate.
    */
   public render(extraMs: number, frameDeltaMs: number): void {
-    const t = Math.min(1, Math.max(0, (this.tickAccumulator + extraMs) / MOVEMENT.TICK_MS));
+    const t = Math.min(1, Math.max(0, (this.tickAccumulator + extraMs) / this.mv.TICK_MS));
     this.renderT = t;
     this.camera.position.lerpVectors(this.prevPosition, this.body.position, t);
 
     const smoothing = 1 - Math.exp(-frameDeltaMs / 60);
-    const targetDrop = this.sneaking && this.mode === 'normal' ? MOVEMENT.SNEAK_EYE_DROP : 0;
+    const targetDrop = this.sneaking && this.mode === 'normal' ? this.mv.SNEAK_EYE_DROP : 0;
     this.eyeDrop += (targetDrop - this.eyeDrop) * smoothing;
     this.camera.position.y -= this.eyeDrop;
 
-    const targetFov = this.sprinting ? MOVEMENT.SPRINT_FOV_MULTIPLIER : 1;
+    const targetFov = this.sprinting ? this.mv.SPRINT_FOV_MULTIPLIER : 1;
     const nextFov = this.fovMultiplier + (targetFov - this.fovMultiplier) * smoothing;
     if (Math.abs(nextFov - this.fovMultiplier) > 1e-4) {
       this.fovMultiplier = nextFov;
@@ -307,9 +349,10 @@ export default class Player {
     }
 
     if (this.shakeIntensity > 0.001) {
-      this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
-      this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;
-      this.camera.position.z += (Math.random() - 0.5) * this.shakeIntensity;
+      const shake = this.shakeIntensity * this.voxelsPerBlock;
+      this.camera.position.x += (Math.random() - 0.5) * shake;
+      this.camera.position.y += (Math.random() - 0.5) * shake;
+      this.camera.position.z += (Math.random() - 0.5) * shake;
     }
   }
 
@@ -338,8 +381,8 @@ export default class Player {
     }
 
     // Reset de queda abismal
-    if (pos.y < -500) {
-      this.teleport(0, 41.6, 0);
+    if (pos.y < -500 * this.voxelsPerBlock) {
+      this.teleport(0, 41.6 * this.voxelsPerBlock, 0);
     }
   }
 
@@ -352,9 +395,9 @@ export default class Player {
     if (dir.lengthSq() > 0) dir.normalize();
 
     const pos = this.body.position;
-    pos.addScaledVector(dir, MOVEMENT.FLY_SPEED).add(this.pendingExternal);
-    if (this.keys[' ']) pos.y += MOVEMENT.FLY_SPEED;
-    if (this.keys['shift'] || this.keys['control']) pos.y -= MOVEMENT.FLY_SPEED;
+    pos.addScaledVector(dir, this.mv.FLY_SPEED).add(this.pendingExternal);
+    if (this.keys[' ']) pos.y += this.mv.FLY_SPEED;
+    if (this.keys['shift'] || this.keys['control']) pos.y -= this.mv.FLY_SPEED;
     this.sprinting = false;
     this.sneaking = false;
     this.updateBobbing();
@@ -365,30 +408,30 @@ export default class Player {
     const m = this.body.velocity;
     const gravityScale = this.body.gravity / GRAVITY_UNIT;
 
-    if (Math.abs(m.x) < MOVEMENT.MOMENTUM_THRESHOLD) m.x = 0;
-    if (Math.abs(m.y) < MOVEMENT.MOMENTUM_THRESHOLD) m.y = 0;
-    if (Math.abs(m.z) < MOVEMENT.MOMENTUM_THRESHOLD) m.z = 0;
+    if (Math.abs(m.x) < this.mv.MOMENTUM_THRESHOLD) m.x = 0;
+    if (Math.abs(m.y) < this.mv.MOMENTUM_THRESHOLD) m.y = 0;
+    if (Math.abs(m.z) < this.mv.MOMENTUM_THRESHOLD) m.z = 0;
 
     // ── Input ──────────────────────────────────────────────────────────────
     this.sneaking = !!this.keys['shift'];
     let forward = this.axis('w', 's');
     let strafe = this.axis('d', 'a');
     if (this.sneaking) {
-      forward *= MOVEMENT.SNEAK_MULTIPLIER;
-      strafe *= MOVEMENT.SNEAK_MULTIPLIER;
+      forward *= this.mv.SNEAK_MULTIPLIER;
+      strafe *= this.mv.SNEAK_MULTIPLIER;
     }
 
     const wantsSprint = this.sprintRequested || !!this.keys['control'];
     this.sprintRequested = false;
-    if (!this.sprinting && wantsSprint && forward >= MOVEMENT.SPRINT_MIN_FORWARD) {
+    if (!this.sprinting && wantsSprint && forward >= this.mv.SPRINT_MIN_FORWARD) {
       this.sprinting = true;
     }
-    if (this.sprinting && (forward < MOVEMENT.SPRINT_MIN_FORWARD || this.collidedHorizontally)) {
+    if (this.sprinting && (forward < this.mv.SPRINT_MIN_FORWARD || this.collidedHorizontally)) {
       this.sprinting = false;
     }
 
-    forward *= MOVEMENT.INPUT_FACTOR;
-    strafe *= MOVEMENT.INPUT_FACTOR;
+    forward *= this.mv.INPUT_FACTOR;
+    strafe *= this.mv.INPUT_FACTOR;
 
     const inWater = this.isInFluid((id) => blockRegistry.isSwimmable(id));
     const inLava = !inWater && this.isInFluid((id) => blockRegistry.isFluid(id) && !blockRegistry.isSwimmable(id));
@@ -397,13 +440,13 @@ export default class Player {
     if (this.jumpTicks > 0) this.jumpTicks--;
     if (this.keys[' ']) {
       if (inWater || inLava) {
-        m.y += MOVEMENT.FLUID_SWIM_UP;
+        m.y += this.mv.FLUID_SWIM_UP;
       } else if (this.body.isGrounded && this.jumpTicks === 0) {
-        m.y = MOVEMENT.JUMP_VELOCITY;
+        m.y = this.mv.JUMP_VELOCITY;
         if (this.sprinting) {
-          m.addScaledVector(this.horizontalAxes().forward, MOVEMENT.SPRINT_JUMP_BOOST);
+          m.addScaledVector(this.horizontalAxes().forward, this.mv.SPRINT_JUMP_BOOST);
         }
-        this.jumpTicks = MOVEMENT.JUMP_COOLDOWN;
+        this.jumpTicks = this.mv.JUMP_COOLDOWN;
       }
     } else {
       this.jumpTicks = 0;
@@ -414,35 +457,35 @@ export default class Player {
 
     if (inWater || inLava) {
       const startY = this.body.position.y;
-      this.moveRelative(strafe, forward, MOVEMENT.FLUID_ACCELERATION);
+      this.moveRelative(strafe, forward, this.mv.FLUID_ACCELERATION);
       this.move();
 
-      const drag = inWater ? MOVEMENT.WATER_DRAG : MOVEMENT.LAVA_DRAG;
+      const drag = inWater ? this.mv.WATER_DRAG : this.mv.LAVA_DRAG;
       m.multiplyScalar(drag);
-      m.y -= MOVEMENT.FLUID_SINK * gravityScale;
+      m.y -= this.mv.FLUID_SINK * gravityScale;
 
       // Sair da água empurrando contra uma borda
-      const climbY = m.y + 0.6 - (this.body.position.y - startY);
+      const climbY = m.y + 0.6 * this.voxelsPerBlock - (this.body.position.y - startY);
       if (this.collidedHorizontally && this.isOffsetFree(m.x, climbY, m.z)) {
-        m.y = MOVEMENT.FLUID_JUMP_OUT;
+        m.y = this.mv.FLUID_JUMP_OUT;
       }
       this.updateBobbing();
       return;
     }
 
     const momentum = this.body.isGrounded
-      ? this.groundSlipperiness() * MOVEMENT.AIR_MOMENTUM
-      : MOVEMENT.AIR_MOMENTUM;
+      ? this.groundSlipperiness() * this.mv.AIR_MOMENTUM
+      : this.mv.AIR_MOMENTUM;
     const acceleration = this.body.isGrounded
-      ? MOVEMENT.WALK_SPEED * (this.sprinting ? MOVEMENT.SPRINT_MULTIPLIER : 1) *
-        (MOVEMENT.GROUND_ACCEL_NUMERATOR / (momentum * momentum * momentum))
-      : (this.sprinting ? MOVEMENT.SPRINT_AIR_ACCELERATION : MOVEMENT.AIR_ACCELERATION);
+      ? this.mv.WALK_SPEED * (this.sprinting ? this.mv.SPRINT_MULTIPLIER : 1) *
+        (this.mv.GROUND_ACCEL_NUMERATOR / (momentum * momentum * momentum))
+      : (this.sprinting ? this.mv.SPRINT_AIR_ACCELERATION : this.mv.AIR_ACCELERATION);
 
     this.moveRelative(strafe, forward, acceleration);
     this.move();
 
-    m.y -= MOVEMENT.GRAVITY * gravityScale;
-    m.y *= MOVEMENT.VERTICAL_DRAG;
+    m.y -= this.mv.GRAVITY * gravityScale;
+    m.y *= this.mv.VERTICAL_DRAG;
     m.x *= momentum;
     m.z *= momentum;
     this.updateBobbing();
@@ -454,11 +497,11 @@ export default class Player {
     const flying = this.mode === 'debug';
     const grounded = this.body.isGrounded && !flying;
 
-    const speed = grounded ? Math.min(MOVEMENT.BOB_MAX, Math.hypot(m.x, m.z)) : 0;
+    const speed = grounded ? Math.min(this.mv.BOB_MAX, Math.hypot(m.x, m.z)) : 0;
     const tilt = grounded || flying ? 0 : Math.atan(-m.y * 0.2) * 15;
 
-    this.bobAmount += (speed - this.bobAmount) * MOVEMENT.BOB_SMOOTHING;
-    this.fallTilt += (tilt - this.fallTilt) * MOVEMENT.FALL_TILT_SMOOTHING;
+    this.bobAmount += (speed - this.bobAmount) * this.mv.BOB_SMOOTHING;
+    this.fallTilt += (tilt - this.fallTilt) * this.mv.FALL_TILT_SMOOTHING;
   }
 
   /** Minecraft's moveFlying: adds input-direction acceleration, normalized when |input| > 1. */
@@ -483,7 +526,7 @@ export default class Player {
       m.z + this.pendingExternal.z * 3,
       this.sneaking
     );
-    this.distanceWalked += Math.hypot(result.x, result.z) * MOVEMENT.BOB_STRIDE;
+    this.distanceWalked += Math.hypot(result.x, result.z) * this.mv.BOB_STRIDE;
     if (result.collidedX) m.x = 0;
     if (result.collidedY) m.y = 0;
     if (result.collidedZ) m.z = 0;
@@ -499,9 +542,10 @@ export default class Player {
   /** Fluid check with Minecraft's box: shrunk 0.4 vertically and 0.001 on every side. */
   private isInFluid(match: (id: number) => boolean): boolean {
     const box = this.body.getBounds();
+    const s = this.voxelsPerBlock;
     return this.anyBlock({
-      minX: box.minX + 0.001, minY: box.minY + 0.4, minZ: box.minZ + 0.001,
-      maxX: box.maxX - 0.001, maxY: box.maxY - 0.4, maxZ: box.maxZ - 0.001
+      minX: box.minX + 0.001 * s, minY: box.minY + 0.4 * s, minZ: box.minZ + 0.001 * s,
+      maxX: box.maxX - 0.001 * s, maxY: box.maxY - 0.4 * s, maxZ: box.maxZ - 0.001 * s
     }, match);
   }
 

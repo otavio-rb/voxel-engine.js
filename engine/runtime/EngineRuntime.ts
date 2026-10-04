@@ -1,11 +1,11 @@
 import { PerspectiveCamera, Scene, WebGLRenderer } from 'three';
-import ProceduralWorld from '../world/ProceduralWorld';
+import ProceduralWorld, { type ProceduralWorldOptions } from '../world/ProceduralWorld';
 import Player from '../player/Player';
 import PlayerInteraction from '../player/PlayerInteraction';
 import { GameLoop } from '../core/GameLoop';
 import { VoxelParticles } from '../effects/VoxelParticles';
 import { EventEmitter } from '../core/EventEmitter';
-import { BlockPosition, WorldConfig } from '../types';
+import { BlockPosition } from '../types';
 import { CommandRegistry } from './CommandRegistry';
 import { registerCoreCommands } from './coreCommands';
 import { PostProcessor } from '../render/PostProcessor';
@@ -25,7 +25,12 @@ export interface EngineWorkerOptions {
   /** Runs before the world is created. Register blocks, dimensions and entities here. */
   setup?: () => void;
   plugins?: EnginePlugin[];
-  world?: Partial<WorldConfig> & { initialDimension?: string };
+  /**
+   * Configuracao do mundo. Aceita tudo que ProceduralWorld aceita, menos o que o runtime
+   * fornece (camera e a fabrica de chunk workers), para que opcoes novas da engine cheguem
+   * ao jogo sem precisar de mais uma lista de campos aqui.
+   */
+  world?: Partial<Omit<ProceduralWorldOptions, 'camera' | 'createChunkWorker'>>;
   /** Block IDs bound to the number keys / mouse wheel. */
   hotbar?: number[];
   spawnPoint?: BlockPosition;
@@ -65,6 +70,10 @@ export class EngineContext extends EventEmitter {
   public readonly postProcessor: PostProcessor;
   /** Graphics shaders on/off (`/shaders`). Effects should fall back to simple materials when off. */
   public shadersEnabled = true;
+  /** Voxels por bloco deste mundo. Multiplique por ele qualquer valor escrito em blocos. */
+  public get voxelsPerBlock(): number {
+    return this.world.voxelsPerBlock;
+  }
 
   constructor(
     public readonly renderer: WebGLRenderer,
@@ -187,7 +196,17 @@ function createContext(options: EngineWorkerOptions, init: InitPayload): EngineC
   renderer.info.autoReset = true;
 
   const scene = new Scene();
-  const camera = new PerspectiveCamera(75, init.width / init.height, 0.1, 5000);
+
+  // A cena e medida em voxels. Com minivoxels os mesmos planos de corte, em blocos,
+  // viram distancias maiores em unidades, e near escala junto para preservar a
+  // precisao do depth buffer (a razao far/near fica igual a do voxel classico).
+  const voxelsPerBlock = options.world?.voxelsPerBlock ?? 1;
+  const camera = new PerspectiveCamera(
+    75,
+    init.width / init.height,
+    0.1 * voxelsPerBlock,
+    5000 * voxelsPerBlock
+  );
 
   const world = new ProceduralWorld({
     chunkSize: 16,
@@ -200,7 +219,7 @@ function createContext(options: EngineWorkerOptions, init: InitPayload): EngineC
   });
   scene.add(world);
 
-  const player = new Player({ camera, world, mode: 'debug' });
+  const player = new Player({ camera, world, mode: 'debug', voxelsPerBlock });
   const interaction = new PlayerInteraction(camera, world);
   if (options.hotbar) interaction.setHotbar(options.hotbar);
 

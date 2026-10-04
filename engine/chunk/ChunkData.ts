@@ -16,6 +16,7 @@ interface ChunkDataParams {
   endZ: number;
   worldParams: WorldParams;
   simplex?: SimplexNoise;
+  voxelsPerBlock?: number;
 }
 
 export default class ChunkData implements ChunkContext {
@@ -28,11 +29,13 @@ export default class ChunkData implements ChunkContext {
   readonly endZ: number;
   readonly worldParams: WorldParams;
   readonly simplex: SimplexNoise;
+  readonly voxelsPerBlock: number;
 
   readonly blocks: Int8Array;
   readonly waterLevels: Uint8Array;
 
-  constructor({ size, startX, endX, startY, endY, startZ, endZ, worldParams, simplex }: ChunkDataParams) {
+  constructor({ size, startX, endX, startY, endY, startZ, endZ, worldParams, simplex, voxelsPerBlock }: ChunkDataParams) {
+    this.voxelsPerBlock = voxelsPerBlock ?? 1;
     this.size = size;
     this.startX = startX;
     this.endX = endX;

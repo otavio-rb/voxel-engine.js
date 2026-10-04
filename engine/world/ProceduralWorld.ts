@@ -42,6 +42,27 @@ export interface ProceduralWorldOptions extends WorldConfig {
   initialDimension?: string;
   workerCount?: number;
   /**
+   * Aneis de nivel de detalhe, em distancia de chunks. `[8, 14, 20]` significa: malha em
+   * resolucao cheia ate 8 chunks, metade da resolucao ate 14, um quarto ate 20 e um oitavo
+   * alem disso. Cada passo precisa dividir `chunkSize`; os aneis sao ordenados e truncados
+   * no primeiro passo que nao divide.
+   *
+   * Omitido (padrao), todo chunk e malhado em resolucao cheia, como antes.
+   */
+  lodRings?: number[];
+  /**
+   * Faixa vertical do mundo, em chunks: `[minChunkY, maxChunkY]`. Default `[-32, 8]`, que e
+   * a faixa do mundo classico (chunks de 16 voxels). Um mundo com outro chunkSize ou outra
+   * escala de voxel precisa da sua propria faixa, senao o teto cai no lugar errado.
+   */
+  chunkYRange?: [number, number];
+  /**
+   * Camada de chunks sempre carregada perto da superficie, em chunks: `[min, max]`.
+   * Default `[0, 7]` (o Y=0..128 do mundo classico). `null` desliga a fixacao, o que
+   * importa quando a faixa vertical e grande: ela multiplica o numero de chunks vivos.
+   */
+  surfacePinRange?: [number, number] | null;
+  /**
    * A chunk with nothing loaded above is lit as open sky only if it sits at or above this Y
    * (deeper chunks stay dark until real light reaches them). Default 0.
    */
@@ -67,6 +88,8 @@ interface LoadedChunk extends LightChunk {
   hasAnimated?: boolean;
   animationStartTime?: number;
   readyNotified?: boolean;
+  /** Passo de LOD da malha atual (1 = resolucao cheia); undefined enquanto nao houver malha. */
+  lod?: number;
 }
 
 /**
@@ -117,6 +140,11 @@ const VOXEL_SHADING_GLSL = /* glsl */ `
 `;
 
 export default class ProceduralWorld extends Group {
+  /**
+   * Voxels por bloco (1 = voxel classico). O grid de voxels e sempre a unidade da cena;
+   * esse fator so converte grandezas escritas em blocos (nevoa, alcance, fisica do jogador).
+   */
+  public readonly voxelsPerBlock: number;
   private readonly chunkSize: number;
   private chunkHeight: number;
   private renderDistance: number;
@@ -141,6 +169,11 @@ export default class ProceduralWorld extends Group {
   // ─── Voxel lighting ───────────────────────────────────────────────────────
   private readonly light: LightEngine;
   private readonly openSkyMinY: number;
+  /** Limites de distancia (em chunks) de cada anel de LOD; vazio = sempre resolucao cheia. */
+  private readonly lodRings: number[];
+  private readonly chunkYMin: number;
+  private readonly chunkYMax: number;
+  private readonly surfacePinRange: [number, number] | null;
 
   private readonly opaqueMaterial: ShaderMaterial;
   private readonly waterMaterial: ShaderMaterial;
@@ -194,6 +227,7 @@ export default class ProceduralWorld extends Group {
   constructor(config: ProceduralWorldOptions) {
     super();
 
+    this.voxelsPerBlock = config.voxelsPerBlock ?? 1;
     this.chunkSize      = config.chunkSize;
     this.chunkHeight    = config.chunkHeight; // Kept for backwards compatibility but not used for mesh height
     this.renderDistance = config.renderDistance;
@@ -215,6 +249,16 @@ export default class ProceduralWorld extends Group {
     this.entityManager = new EntityManager(this);
     this.light = new LightEngine(this.chunkSize);
     this.openSkyMinY = config.openSkyMinY ?? 0;
+    [this.chunkYMin, this.chunkYMax] = config.chunkYRange ?? [-32, 8];
+    this.surfacePinRange = config.surfacePinRange === undefined ? [0, 7] : config.surfacePinRange;
+
+    // Um passo de LOD so e valido se dividir o chunk: senao a reamostragem nao fecha.
+    // Trunca o prefixo valido em vez de filtrar, porque o passo de cada anel vem do
+    // indice dele: descartar um anel do meio deslocaria todos os seguintes.
+    const rings = [...(config.lodRings ?? [])].sort((a, b) => a - b);
+    let validRings = 0;
+    while (validRings < rings.length && this.chunkSize % (2 ** (validRings + 1)) === 0) validRings++;
+    this.lodRings = rings.slice(0, validRings);
 
     this.opaqueMaterial = new ShaderMaterial({
       uniforms: {
@@ -222,8 +266,8 @@ export default class ProceduralWorld extends Group {
         uSkyColor:       { value: new Color(0x87CEEB) },
         uSunDirection:   { value: new Vector3(1, 1, 1).normalize() },
         uShadersEnabled: { value: 1.0 },
-        uFogNear:        { value: 128.0 },
-        uFogFar:         { value: 256.0 },
+        uFogNear:        { value: 128.0 * this.voxelsPerBlock },
+        uFogFar:         { value: 256.0 * this.voxelsPerBlock },
         uDaylight:       { value: 1.0 },
         uMinLight:       { value: 0.03 },
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
@@ -318,8 +362,8 @@ export default class ProceduralWorld extends Group {
         uSkyColor:       { value: new Color(0x87CEEB) },
         uSunDirection:   { value: new Vector3(1, 1, 1).normalize() },
         uShadersEnabled: { value: 1.0 },
-        uFogNear:        { value: 128.0 },
-        uFogFar:         { value: 256.0 },
+        uFogNear:        { value: 128.0 * this.voxelsPerBlock },
+        uFogFar:         { value: 256.0 * this.voxelsPerBlock },
         uDaylight:       { value: 1.0 },
         uMinLight:       { value: 0.03 },
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
@@ -521,10 +565,7 @@ export default class ProceduralWorld extends Group {
     this.opaqueMaterial.uniforms.uSkyColor.value.copy(color);
     this.waterMaterial.uniforms.uSkyColor.value.copy(color);
     
-    this.opaqueMaterial.uniforms.uFogNear.value = fogStart;
-    this.opaqueMaterial.uniforms.uFogFar.value = fogEnd;
-    this.waterMaterial.uniforms.uFogNear.value = fogStart;
-    this.waterMaterial.uniforms.uFogFar.value = fogEnd;
+    this.setFogRange(fogStart, fogEnd);
   }
 
   public setTime(phase: string): void {
@@ -545,10 +586,7 @@ export default class ProceduralWorld extends Group {
     // Configura névoa e cores atmosféricas da dimensão
     const fogNear = dimension.atmosphere.fogNear ?? 128.0;
     const fogFar = dimension.atmosphere.fogFar ?? 256.0;
-    this.opaqueMaterial.uniforms.uFogNear.value = fogNear;
-    this.opaqueMaterial.uniforms.uFogFar.value = fogFar;
-    this.waterMaterial.uniforms.uFogNear.value = fogNear;
-    this.waterMaterial.uniforms.uFogFar.value = fogFar;
+    this.setFogRange(fogNear, fogFar);
 
     const fogColor = new Color(dimension.atmosphere.fogColor ?? dimension.atmosphere.horizonColor);
     this.opaqueMaterial.uniforms.uSkyColor.value.copy(fogColor);
@@ -636,6 +674,15 @@ export default class ProceduralWorld extends Group {
     return this.opaqueMaterial;
   }
 
+  /** Define a nevoa em blocos; converte para unidades de voxel do mundo. */
+  private setFogRange(nearBlocks: number, farBlocks: number): void {
+    const s = this.voxelsPerBlock;
+    for (const mat of [this.opaqueMaterial, this.waterMaterial]) {
+      mat.uniforms.uFogNear.value = nearBlocks * s;
+      mat.uniforms.uFogFar.value = farBlocks * s;
+    }
+  }
+
   public getWaterMaterial(): ShaderMaterial {
     return this.waterMaterial;
   }
@@ -664,10 +711,10 @@ export default class ProceduralWorld extends Group {
           }
         }
         if (this.weatherFogNear !== null) {
-          mat.uniforms.uFogNear.value = this.weatherFogNear;
+          mat.uniforms.uFogNear.value = this.weatherFogNear * this.voxelsPerBlock;
         }
         if (this.weatherFogFar !== null) {
-          mat.uniforms.uFogFar.value = this.weatherFogFar;
+          mat.uniforms.uFogFar.value = this.weatherFogFar * this.voxelsPerBlock;
         }
         mat.uniforms.uSunDirection.value.copy(this.sky.directional.position).normalize();
         mat.uniforms.uDaylight.value = this.sky.daylight;
@@ -842,7 +889,7 @@ export default class ProceduralWorld extends Group {
     geometry.computeBoundingSphere();
     if (geometry.boundingSphere) {
       // Expand bounding sphere so frustum culling does not clip the chunk while it rises from below
-      geometry.boundingSphere.radius += 30.0;
+      geometry.boundingSphere.radius += 30.0 * this.voxelsPerBlock;
     }
 
     const mesh = new Mesh(geometry, material);
@@ -1179,6 +1226,21 @@ export default class ProceduralWorld extends Group {
       return b !== -1 && blockRegistry.isSolid(b);
   }
 
+  /**
+   * Passo de LOD de um chunk, pela distancia ate a camera. Sem aneis configurados, sempre 1.
+   */
+  private lodStepFor(key: string): number {
+    if (this.lodRings.length === 0) return 1;
+    // Antes do primeiro updateChunks a posicao em chunks ainda e Infinity: resolucao cheia,
+    // para nao malhar o spawn em LOD grosso e ter que refazer tudo no quadro seguinte.
+    if (!Number.isFinite(this.lastPlayerChunkX)) return 1;
+    const dist = Math.sqrt(this.keyDistanceNumeric(key, this.lastPlayerChunkX, this.lastPlayerChunkY, this.lastPlayerChunkZ));
+    for (let i = 0; i < this.lodRings.length; i++) {
+      if (dist < this.lodRings[i]) return 2 ** i;
+    }
+    return 2 ** this.lodRings.length;
+  }
+
   private updateChunks(force: boolean): void {
     const cx = Math.floor(this.camera.position.x / this.chunkSize);
     const cy = Math.floor(this.camera.position.y / this.chunkSize);
@@ -1190,8 +1252,8 @@ export default class ProceduralWorld extends Group {
     const radiusSq = this.renderDistance * this.renderDistance;
     
     // Dynamic vertical range around player position (supporting deep underground downwards)
-    const minCy = Math.max(-32, cy - this.verticalRenderDistance);
-    const maxCy = Math.min(8, cy + this.verticalRenderDistance);
+    const minCy = Math.max(this.chunkYMin, cy - this.verticalRenderDistance);
+    const maxCy = Math.min(this.chunkYMax, cy + this.verticalRenderDistance);
 
     for (let dx = -this.renderDistance; dx <= this.renderDistance; dx++) {
       for (let dz = -this.renderDistance; dz <= this.renderDistance; dz++) {
@@ -1202,9 +1264,9 @@ export default class ProceduralWorld extends Group {
           desired.add(this.chunkKey((cx + dx) * this.chunkSize, targetCy * this.chunkSize, (cz + dz) * this.chunkSize));
         }
         
-        // B) Surface Pinning Layer (Permanent view of terrain from Y=0 to Y=128 when near surface)
-        if (cy >= -2) {
-          for (let baseCy = 0; baseCy <= 7; baseCy++) {
+        // B) Surface Pinning Layer (Permanent view of terrain near the surface)
+        if (this.surfacePinRange && cy >= -2) {
+          for (let baseCy = this.surfacePinRange[0]; baseCy <= this.surfacePinRange[1]; baseCy++) {
             desired.add(this.chunkKey((cx + dx) * this.chunkSize, baseCy * this.chunkSize, (cz + dz) * this.chunkSize));
           }
         }
@@ -1221,6 +1283,15 @@ export default class ProceduralWorld extends Group {
       if (!desired.has(key)) { this.pool.cancel(key); this.pendingChunks.delete(key); }
     }
     
+    // Chunks que cruzaram a fronteira de um anel precisam de uma malha nova no novo passo.
+    if (this.lodRings.length > 0) {
+      for (const [key, chunk] of this.loadedChunks) {
+        if (chunk.lod !== undefined && chunk.lod !== this.lodStepFor(key)) {
+          this.checkAndQueueMeshing(key);
+        }
+      }
+    }
+
     const toRequest = Array.from(desired)
       .filter(k => !this.loadedChunks.has(k) && !this.pendingChunks.has(k))
       .sort((a, b) => this.keyDistanceNumeric(a, cx, cy, cz) - this.keyDistanceNumeric(b, cx, cy, cz));
@@ -1237,7 +1308,7 @@ export default class ProceduralWorld extends Group {
         startX, endX: startX + this.chunkSize, 
         startY, endY: startY + this.chunkSize, 
         startZ, endZ: startZ + this.chunkSize,
-        worldParams: this.params, neighbourBorderBlocks: this.getNeighbourBorderBlocks(startX, startY, startZ),
+        worldParams: this.params, voxelsPerBlock: this.voxelsPerBlock, neighbourBorderBlocks: this.getNeighbourBorderBlocks(startX, startY, startZ),
         computeLight: true,
         presumeSky: this.presumesSky(startY),
         buildMesh: false // We only want terrain data first!
@@ -1297,19 +1368,22 @@ export default class ProceduralWorld extends Group {
     }
     this.pendingRebuildChunks.add(key);
     const [sx, sy, sz] = this.decodeKey(key);
+    const lodStep = this.lodStepFor(key);
+    chunk.lod = lodStep;
     this.rebuildPool.dispatch(
       {
         chunkKey: key, size: this.chunkSize, height: this.chunkSize,
         startX: sx, endX: sx + this.chunkSize, 
         startY: sy, endY: sy + this.chunkSize, 
         startZ: sz, endZ: sz + this.chunkSize,
-        worldParams: this.params, neighbourBorderBlocks: this.getNeighbourBorderBlocks(sx, sy, sz),
+        worldParams: this.params, voxelsPerBlock: this.voxelsPerBlock, neighbourBorderBlocks: this.getNeighbourBorderBlocks(sx, sy, sz),
         existingBlocks: chunk.data.blocks,
         existingWaterLevels: chunk.data.waterLevels,
         light: chunk.light,
         neighbourBorderLight: this.light.neighborBorders(chunk),
         neighbourBorderWaterLevels: this.getNeighbourBorderWaterLevels(sx, sy, sz),
-        buildMesh: true // Rebuild jobs explicitly request the mesh
+        buildMesh: true, // Rebuild jobs explicitly request the mesh
+        lodStep: lodStep
       },
       (response) => this.onRebuildReady(response),
       true // highPriority: meshing jobs take precedence over distant terrain generation

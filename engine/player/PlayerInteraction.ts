@@ -2,8 +2,6 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import ProceduralWorld from '../world/ProceduralWorld';
 import { raycastVoxel } from '../physics/VoxelRaycaster';
 
-/** Alcance máximo de interação do jogador em blocos. */
-const REACH = 8;
 
 /**
  * Gerencia a interação do jogador com o mundo voxel (seleção, destruição e colocação de blocos).
@@ -12,6 +10,10 @@ const REACH = 8;
 export default class PlayerInteraction {
   private readonly rayOrigin = new Vector3();
   private readonly lookDirection = new Vector3();
+
+  /** Alcance de interacao, em unidades de voxel (8 blocos por padrao). */
+  public reach: number;
+  public clickHandler?: (button: number) => boolean;
 
   private isLocked = false;
   private selectedBlockType: number = 0;
@@ -25,7 +27,9 @@ export default class PlayerInteraction {
     public onBlockDestroyed?: (pos: Vector3, normal: Vector3, blockType?: number) => void,
     public onBlockPlaced?: (pos: Vector3, normal: Vector3, type: number) => void,
     public onSelectionChange?: (type: number) => void
-  ) {}
+  ) {
+    this.reach = 8 * world.voxelsPerBlock;
+  }
 
   /** Block IDs bound to the number keys / mouse wheel, in slot order. */
   public setHotbar(types: number[]): void {
@@ -88,7 +92,7 @@ export default class PlayerInteraction {
     this.camera.getWorldDirection(this.lookDirection);
     this.rayOrigin.copy(this.camera.position);
 
-    const hit = raycastVoxel(this.world, this.rayOrigin, this.lookDirection, REACH);
+    const hit = raycastVoxel(this.world, this.rayOrigin, this.lookDirection, this.reach);
 
     if (!hit) {
       this.world.clearBlockOutline();
@@ -101,10 +105,14 @@ export default class PlayerInteraction {
 
   /** Dispara a ação de clique do mouse (0: quebrar bloco, 2: colocar bloco). */
   public triggerClick(button: number): void {
+    if (this.clickHandler && this.clickHandler(button)) {
+      return;
+    }
+
     this.camera.getWorldDirection(this.lookDirection);
     this.rayOrigin.copy(this.camera.position);
 
-    const hit = raycastVoxel(this.world, this.rayOrigin, this.lookDirection, REACH);
+    const hit = raycastVoxel(this.world, this.rayOrigin, this.lookDirection, this.reach);
     if (!hit) return;
 
     if (button === 0) {

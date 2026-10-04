@@ -48,7 +48,7 @@ export {
 export { raycastVoxel, type VoxelRaycastHit, type VoxelWorldReader } from './physics/VoxelRaycaster';
 export { default as WaterSimulator } from './physics/WaterSimulator';
 
-export { default as Player, type PlayerMode } from './player/Player';
+export { default as Player, type PlayerMode, MOVEMENT, scaleMovement, type MovementTable } from './player/Player';
 
 export {
   VoxelParticles,
