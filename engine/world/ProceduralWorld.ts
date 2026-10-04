@@ -10,6 +10,8 @@ import {
   LineSegments,
   EdgesGeometry,
   BoxGeometry,
+  Data3DTexture,
+  DataTexture,
   PerspectiveCamera, 
   WebGLRenderer,
   Scene,
@@ -33,6 +35,11 @@ import { EntityManager } from '../entities/EntityManager';
 import { DimensionDefinition, DEFAULT_DIMENSION } from '../dimension/Dimension';
 import { dimensionRegistry } from '../dimension/DimensionRegistry';
 import { LightChunk, LightEngine } from './LightEngine';
+import {
+  createPaletteTexture,
+  createVoxelRaymarchMaterial,
+  createVoxelTexture
+} from '../render/VoxelRaymarch';
 
 export interface ProceduralWorldOptions extends WorldConfig {
   camera: PerspectiveCamera;
@@ -83,6 +90,12 @@ export interface ProceduralWorldOptions extends WorldConfig {
    */
   shareUniformChunks?: boolean;
   /**
+   * Como um chunk e desenhado. `'mesh'` (default) e o greedy meshing. `'raymarch'` e o
+   * prototipo de DDA em textura 3D: nao gera malha nenhuma, desenha a caixa do chunk e
+   * percorre os voxels no fragment shader. Ver render/VoxelRaymarch.ts.
+   */
+  chunkRenderer?: 'mesh' | 'raymarch';
+  /**
    * Faixa vertical do mundo, em chunks: `[minChunkY, maxChunkY]`. Default `[-32, 8]`, que e
    * a faixa do mundo classico (chunks de 16 voxels). Um mundo com outro chunkSize ou outra
    * escala de voxel precisa da sua propria faixa, senao o teto cai no lugar errado.
@@ -100,6 +113,16 @@ export interface ProceduralWorldOptions extends WorldConfig {
    */
   openSkyMinY?: number;
 }
+
+/**
+ * Uniforms do raymarch que valem para o mundo todo, nao por chunk. Os clones por chunk
+ * apontam para os mesmos objetos, entao atualizar o template atualiza todos.
+ */
+const RAYMARCH_SHARED_UNIFORMS = [
+  'uPalette', 'uChunkSize', 'uMaxSteps',
+  'uSunDirection', 'uSkyColor', 'uFogNear', 'uFogFar', 'uDaylight', 'uMinLight',
+  'uVoxelEdge', 'uVoxelEdgeFade', 'uVoxelGrain', 'uDebugSteps', 'uProjection'
+] as const;
 
 /** Como `editSphere` trata cada voxel da esfera. */
 export type SphereEditMode = 'destroy' | 'fill' | 'paint';
@@ -127,6 +150,9 @@ interface LoadedChunk extends LightChunk {
   sharedBlocks?: boolean;
   /** `light` e compartilhado; idem. */
   sharedLight?: boolean;
+  /** Caminho de raymarch: a caixa desenhada e a textura 3D de voxels deste chunk. */
+  raymarchMesh?: Mesh | null;
+  voxelTexture?: Data3DTexture | null;
   /** Passo de LOD da malha atual (1 = resolucao cheia); undefined enquanto nao houver malha. */
   lod?: number;
 }
@@ -248,6 +274,11 @@ export default class ProceduralWorld extends Group {
   private readonly voxelEdge: number;
   private readonly voxelEdgeFadeBlocks: number;
   private readonly shareUniformChunks: boolean;
+  private readonly chunkRenderer: 'mesh' | 'raymarch';
+  private raymarchTemplate: ShaderMaterial | null = null;
+  /** Pinta cada pixel pelo numero de passos de DDA gastos: verde barato, vermelho caro. */
+  public raymarchDebugSteps = false;
+  private paletteTexture: DataTexture | null = null;
   private readonly chunkYMin: number;
   private readonly chunkYMax: number;
   private readonly surfacePinRange: [number, number] | null;
@@ -309,6 +340,7 @@ export default class ProceduralWorld extends Group {
     this.voxelEdge = config.voxelEdge ?? 0.0;
     this.voxelEdgeFadeBlocks = config.voxelEdgeFadeBlocks ?? 20.0;
     this.shareUniformChunks = config.shareUniformChunks ?? true;
+    this.chunkRenderer = config.chunkRenderer ?? 'mesh';
     this.chunkSize      = config.chunkSize;
     this.chunkHeight    = config.chunkHeight; // Kept for backwards compatibility but not used for mesh height
     this.renderDistance = config.renderDistance;
@@ -793,6 +825,19 @@ export default class ProceduralWorld extends Group {
   }
 
   tick(delta: number = 16.6667): void {
+    if (this.raymarchTemplate) {
+      const u = this.raymarchTemplate.uniforms;
+      u.uSunDirection.value.copy(this.sky.directional.position).normalize();
+      u.uDaylight.value = this.sky.daylight;
+      u.uMinLight.value = this.activeDimension.atmosphere.minLight ?? 0.03;
+      u.uSkyColor.value.copy(this.opaqueMaterial.uniforms.uSkyColor.value);
+      u.uFogNear.value = this.opaqueMaterial.uniforms.uFogNear.value;
+      u.uFogFar.value = this.opaqueMaterial.uniforms.uFogFar.value;
+      u.uDebugSteps.value = this.raymarchDebugSteps ? 1.0 : 0.0;
+      // A projecao muda com resize e com o FOV do sprint, entao e copiada por frame.
+      u.uProjection.value.copy(this.camera.projectionMatrix);
+    }
+
     [this.opaqueMaterial, this.waterMaterial].forEach(mat => {
         mat.uniforms.uTime.value = this.elapsedTime;
         if (!this.isUnderwater) {
@@ -990,6 +1035,7 @@ export default class ProceduralWorld extends Group {
   }
 
   private destroyChunkMeshes(chunk: LoadedChunk): void {
+    this.disposeRaymarchChunk(chunk);
     if (chunk.opaqueMesh) {
         chunk.opaqueMesh.geometry.dispose();
         this.remove(chunk.opaqueMesh);
@@ -1542,6 +1588,13 @@ export default class ProceduralWorld extends Group {
         this.light.stitchChunk(chunk, this.neighborChunks(cx, cy, cz), !!response.light && this.presumesSky(cy));
     }
     
+    if (this.chunkRenderer === 'raymarch') {
+      // Sem malha e sem roundtrip de worker: a textura 3D E o dado do chunk.
+      const chunk = this.loadedChunks.get(response.chunkKey);
+      if (chunk) this.applyRaymarchChunk(chunk);
+      return;
+    }
+
     // Attempt to mesh this chunk and its existing neighbors.
     this.checkAndQueueMeshing(response.chunkKey);
     const [sx, sy, sz] = this.decodeKey(response.chunkKey);
@@ -1569,7 +1622,94 @@ export default class ProceduralWorld extends Group {
     if (this.lastChunkKey === key) { this.lastChunk = null; this.lastChunkKey = null; }
   }
 
+  /**
+   * Cria ou atualiza a caixa de raymarch de um chunk.
+   *
+   * Chunk uniforme de ar nao desenha nada: e a maioria do mundo, e uma caixa transparente por
+   * chunk de ceu custaria um draw call para descartar todos os fragmentos.
+   */
+  private applyRaymarchChunk(chunk: LoadedChunk): void {
+    if (chunk.sharedBlocks && chunk.data.blocks[0] === AIR) {
+      this.disposeRaymarchChunk(chunk);
+      return;
+    }
+
+    if (!this.raymarchTemplate) {
+      this.raymarchTemplate = createVoxelRaymarchMaterial(this.chunkSize);
+      this.paletteTexture = createPaletteTexture();
+      const u = this.raymarchTemplate.uniforms;
+      u.uPalette.value = this.paletteTexture;
+      u.uVoxelEdge.value = this.voxelEdge;
+      u.uVoxelGrain.value = this.voxelGrain;
+      u.uVoxelEdgeFade.value = this.voxelEdgeFadeBlocks * this.voxelsPerBlock;
+      u.uDebugSteps.value = this.raymarchDebugSteps ? 1.0 : 0.0;
+    }
+
+    if (chunk.voxelTexture) {
+      // Edicao: o buffer e o mesmo, basta reenviar. No caminho de malha isto seria remalhar o
+      // chunk inteiro, medido em ~76 ms para um chunk 64^3.
+      chunk.voxelTexture.needsUpdate = true;
+      return;
+    }
+
+    const texture = createVoxelTexture(chunk.data.blocks, this.chunkSize);
+    const material = this.raymarchTemplate.clone();
+
+    // `clone()` copia os uniforms em profundidade. Reaponta os que sao globais para os objetos
+    // do template, por REFERENCIA: assim `tick` atualiza sol, nevoa e dia/noite uma vez, e nao
+    // uma vez por chunk carregado.
+    for (const key of RAYMARCH_SHARED_UNIFORMS) {
+      material.uniforms[key] = this.raymarchTemplate.uniforms[key];
+    }
+
+    material.uniforms.uVoxels = { value: texture };
+    material.uniforms.uChunkOrigin = {
+      value: new Vector3(chunk.data.startX, chunk.data.startY, chunk.data.startZ)
+    };
+
+    const half = this.chunkSize / 2;
+    const mesh = new Mesh(this.raymarchBox(), material);
+    mesh.position.set(
+      chunk.data.startX + half, chunk.data.startY + half, chunk.data.startZ + half
+    );
+    mesh.frustumCulled = true;
+
+    chunk.voxelTexture = texture;
+    chunk.raymarchMesh = mesh;
+    this.add(mesh);
+
+    if (!chunk.readyNotified) {
+      chunk.readyNotified = true;
+      this.events.emit<ChunkReadyEvent>('chunk:ready', {
+        key: chunk.key, data: chunk.data, chunkSize: this.chunkSize
+      });
+    }
+  }
+
+  /** Uma unica BoxGeometry compartilhada por todas as caixas de chunk. */
+  private sharedBox: BoxGeometry | null = null;
+  private raymarchBox(): BoxGeometry {
+    if (!this.sharedBox) this.sharedBox = new BoxGeometry(this.chunkSize, this.chunkSize, this.chunkSize);
+    return this.sharedBox;
+  }
+
+  private disposeRaymarchChunk(chunk: LoadedChunk): void {
+    if (chunk.raymarchMesh) {
+      this.remove(chunk.raymarchMesh);
+      (chunk.raymarchMesh.material as ShaderMaterial).dispose();
+      chunk.raymarchMesh = null;
+    }
+    if (chunk.voxelTexture) {
+      chunk.voxelTexture.dispose();
+      chunk.voxelTexture = null;
+    }
+  }
+
   private asyncRebuild(key: string, chunk: LoadedChunk): void {
+    if (this.chunkRenderer === 'raymarch') {
+      this.applyRaymarchChunk(chunk);
+      return;
+    }
     if (this.pendingRebuildChunks.has(key)) {
       this.staleRebuildChunks.add(key);
       return;
