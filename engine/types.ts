@@ -44,6 +44,8 @@ export interface ChunkJobData {
   startZ: number;
   endZ: number;
   worldParams: WorldParams;
+  /** Voxels por bloco; repassado aos geradores via ChunkContext. Default 1. */
+  voxelsPerBlock?: number;
   /** Border blocks from already-loaded neighbours, used for cross-chunk face culling. */
   neighbourBorderBlocks: ChunkBorders;
   /** If provided, skip terrain generation and use these blocks directly (async rebuild). */
@@ -52,6 +54,12 @@ export interface ChunkJobData {
   existingWaterLevels?: Uint8Array;
   /** Whether to construct and return 3D geometry. */
   buildMesh?: boolean;
+  /**
+   * Nivel de detalhe da malha: 1 = resolucao cheia, 2/4/8 = o chunk e reamostrado em
+   * macro-celulas de `lodStep` voxels antes do meshing. Deve dividir `size`. Os dados de
+   * voxel continuam em resolucao cheia; so a geometria perde detalhe.
+   */
+  lodStep?: number;
   /** Generation jobs: also compute the chunk's own light (see LightEngine.computeLocal). */
   computeLight?: boolean;
   /** With `computeLight`: light the top as open sky. */
@@ -129,6 +137,13 @@ export interface WorkerResponse {
 }
 
 export interface WorldConfig {
+  /**
+   * Quantos voxels cabem em um bloco (um metro). 1 e o voxel classico; 8 significa
+   * minivoxels de 1/8 de bloco. Nao muda o grid: um voxel continua valendo uma unidade
+   * da cena. O que muda e o tamanho do jogador, da fisica, do alcance e da nevoa,
+   * todos escritos em blocos e convertidos por esse fator.
+   */
+  voxelsPerBlock?: number;
   renderDistance: number;
   verticalRenderDistance: number;
   chunkSize: number;

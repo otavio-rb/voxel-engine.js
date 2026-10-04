@@ -39,6 +39,8 @@ export interface KinematicBodyOptions {
   gravity?: number;
   friction?: number;
   eyeHeight?: number;
+  /** Unidades de mundo por bloco. Escala as granularidades internas do resolvedor. */
+  unitScale?: number;
 }
 
 /**
@@ -52,6 +54,7 @@ export class KinematicBody {
   public gravity: number;
   public friction: number;
   public eyeHeight: number;
+  public readonly unitScale: number;
   public isGrounded = false;
 
   constructor(options: KinematicBodyOptions) {
@@ -59,6 +62,7 @@ export class KinematicBody {
     this.gravity = options.gravity ?? 0.008;
     this.friction = options.friction ?? 0.9;
     this.eyeHeight = options.eyeHeight ?? 0;
+    this.unitScale = options.unitScale ?? 1;
   }
 
   /**
@@ -190,7 +194,7 @@ export class KinematicBody {
     const reqY = dy;
 
     if (sneakEdge && this.isGrounded) {
-      const step = 0.05;
+      const step = 0.05 * this.unitScale;
       const hasGround = (ox: number, oz: number) =>
         KinematicBody.intersectsSolid(world, offset(box, ox, -1, oz));
       while (dx !== 0 && !hasGround(dx, 0)) {
