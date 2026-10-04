@@ -18,7 +18,7 @@ import {
 import WorkerPool from './WorkerPool';
 import Sky from './Sky';
 import WaterSimulator, { WorldWaterAccess } from '../physics/WaterSimulator';
-import { blockRegistry } from '../blocks/BlockRegistry';
+import { AIR, blockRegistry } from '../blocks/BlockRegistry';
 import { 
   WorldParams, 
   ChunkDataResult, 
@@ -51,6 +51,19 @@ export interface ProceduralWorldOptions extends WorldConfig {
    */
   lodRings?: number[];
   /**
+   * Amplitude da variacao de cor por voxel. Default 0.06, quase imperceptivel, que e o
+   * suficiente para um mundo de blocos grandes. Um mundo de minivoxels precisa de bem
+   * mais (~0.3) para que a superficie leia como granulada em vez de lisa.
+   */
+  voxelGrain?: number;
+  /**
+   * Intensidade do contorno escuro na aresta de cada voxel. Default 0 (desligado).
+   * E o cue mais forte de escala: sem ele uma parede lisa de minivoxels e visualmente
+   * identica a uma parede de blocos grandes, porque o greedy meshing funde as duas no
+   * mesmo quad e a AO e por vertice.
+   */
+  voxelEdge?: number;
+  /**
    * Faixa vertical do mundo, em chunks: `[minChunkY, maxChunkY]`. Default `[-32, 8]`, que e
    * a faixa do mundo classico (chunks de 16 voxels). Um mundo com outro chunkSize ou outra
    * escala de voxel precisa da sua propria faixa, senao o teto cai no lugar errado.
@@ -68,6 +81,9 @@ export interface ProceduralWorldOptions extends WorldConfig {
    */
   openSkyMinY?: number;
 }
+
+/** Como `editSphere` trata cada voxel da esfera. */
+export type SphereEditMode = 'destroy' | 'fill' | 'paint';
 
 /** Payload of the `chunk:ready` event, fired the first time a chunk gets a mesh. */
 export interface ChunkReadyEvent {
@@ -109,10 +125,33 @@ const VOXEL_SHADING_GLSL = /* glsl */ `
   const vec3 SUN_TINT = vec3(1.06, 1.0, 0.9);
   const vec3 SHADE_TINT = vec3(0.88, 0.94, 1.08);
 
+  uniform float uVoxelGrain;
+  uniform float uVoxelEdge;
+
   float voxelHash(vec3 p) {
     p = fract(p * 0.3183099 + 0.1);
     p *= 17.0;
     return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+
+  /**
+   * Contorno do voxel na face.
+   *
+   * Em superficie plana o greedy meshing funde muitos voxels em um unico quad, e a AO e
+   * por vertice: nada na imagem revela o tamanho do voxel. Sem isso, um mundo de
+   * minivoxels e indistinguivel de um mundo de blocos grandes em qualquer parede lisa.
+   *
+   * O contorno desaparece com a distancia (derivado de uFogNear, nao de fwidth, que
+   * exigiria a extensao de derivadas): de longe um grid de 1 voxel viraria moire.
+   */
+  float voxelEdge(vec3 p, vec3 n) {
+    vec3 f = abs(fract(p) - 0.5);
+    vec3 planeMask = 1.0 - abs(n);          // ignora o eixo da normal
+    float d = max(max(f.x * planeMask.x, f.y * planeMask.y), f.z * planeMask.z);
+    float line = smoothstep(0.40, 0.5, d);
+    float dist = length(p - cameraPosition);
+    float fade = 1.0 - smoothstep(uFogNear * 0.12, uFogNear * 0.45, dist);
+    return line * fade;
   }
 
   // Brilho = l / (4 - 3l) como no Minecraft; luz do céu tingida pelo sol, luz de bloco quente
@@ -171,6 +210,8 @@ export default class ProceduralWorld extends Group {
   private readonly openSkyMinY: number;
   /** Limites de distancia (em chunks) de cada anel de LOD; vazio = sempre resolucao cheia. */
   private readonly lodRings: number[];
+  private readonly voxelGrain: number;
+  private readonly voxelEdge: number;
   private readonly chunkYMin: number;
   private readonly chunkYMax: number;
   private readonly surfacePinRange: [number, number] | null;
@@ -228,6 +269,8 @@ export default class ProceduralWorld extends Group {
     super();
 
     this.voxelsPerBlock = config.voxelsPerBlock ?? 1;
+    this.voxelGrain = config.voxelGrain ?? 0.06;
+    this.voxelEdge = config.voxelEdge ?? 0.0;
     this.chunkSize      = config.chunkSize;
     this.chunkHeight    = config.chunkHeight; // Kept for backwards compatibility but not used for mesh height
     this.renderDistance = config.renderDistance;
@@ -271,6 +314,8 @@ export default class ProceduralWorld extends Group {
         uDaylight:       { value: 1.0 },
         uMinLight:       { value: 0.03 },
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
+        uVoxelGrain:     { value: this.voxelGrain },
+        uVoxelEdge:      { value: this.voxelEdge },
       },
       vertexShader: `
         attribute float creationTime;
@@ -332,10 +377,14 @@ export default class ProceduralWorld extends Group {
           vec3 inside = vWorldPos - vNormal * 0.001;
           float texel = voxelHash(floor(inside * 16.0));
           float block = voxelHash(floor(inside) + 17.0);
-          vec3 albedo = vColor * (0.93 + 0.1 * texel) * (0.97 + 0.06 * block);
+          // Centrado em 1.0: com uVoxelGrain 0.06 isso e exatamente (0.97 + 0.06 * block).
+          vec3 albedo = vColor * (0.93 + 0.1 * texel) * (1.0 - uVoxelGrain * 0.5 + uVoxelGrain * block);
 
           float diffuse = max(dot(vNormal, normalize(uSunDirection)), 0.0);
           vec3 lighting = albedo * voxelLight(vNormal, diffuse) * aoMultiplier * 1.1;
+          if (uVoxelEdge > 0.0) {
+            lighting *= 1.0 - uVoxelEdge * voxelEdge(inside, vNormal);
+          }
 
           // Magma emissive heat: if color matches magma block, emits warm fiery glow
           if (vColor.r > 0.7 && vColor.b < 0.15 && vColor.g > 0.15 && vColor.g < 0.35) {
@@ -367,6 +416,8 @@ export default class ProceduralWorld extends Group {
         uDaylight:       { value: 1.0 },
         uMinLight:       { value: 0.03 },
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
+        uVoxelGrain:     { value: this.voxelGrain },
+        uVoxelEdge:      { value: this.voxelEdge },
         uStormChoppiness: { value: 0.0 },
       },
       vertexShader: `
@@ -1102,12 +1153,32 @@ export default class ProceduralWorld extends Group {
     return true;
   }
 
-  destroySphere(center: Vector3, radius: number): Array<{ pos: Vector3; blockType: number }> {
-    const destroyed: Array<{ pos: Vector3; blockType: number }> = [];
+  /**
+   * Edita uma esfera de voxels em uma passada.
+   *
+   * E o caminho certo para qualquer ferramenta de volume (explosao, pincel de escultura):
+   * agrupa as escritas por chunk, atualiza as fatias de fronteira afetadas e dispara um
+   * unico rebuild por chunk no fim, em vez de um rebuild por voxel. Num mundo de
+   * minivoxels isso e a diferenca entre um clique e um travamento: uma esfera de raio 4
+   * toca ~268 voxels, e de raio 6 toca ~905.
+   *
+   * Retorna o que foi alterado, com o tipo que estava ali antes.
+   */
+  public editSphere(
+    center: Vector3,
+    radius: number,
+    mode: SphereEditMode = 'destroy',
+    blockType: number = AIR
+  ): Array<{ pos: Vector3; blockType: number }> {
+    const changed: Array<{ pos: Vector3; blockType: number }> = [];
+    const newType = mode === 'destroy' ? AIR : blockType;
+
     const minX = Math.floor(center.x - radius);
     const maxX = Math.ceil(center.x + radius);
-    const minY = Math.max(-64, Math.floor(center.y - radius));
-    const maxY = Math.min(128, Math.ceil(center.y + radius));
+    // Limites verticais do mundo configurado: fixa-los em voxels, como antes, cortava
+    // qualquer mundo com outra escala de voxel bem no meio do terreno.
+    const minY = Math.max(this.chunkYMin * this.chunkSize, Math.floor(center.y - radius));
+    const maxY = Math.min((this.chunkYMax + 1) * this.chunkSize - 1, Math.ceil(center.y + radius));
     const minZ = Math.floor(center.z - radius);
     const maxZ = Math.ceil(center.z + radius);
 
@@ -1115,6 +1186,7 @@ export default class ProceduralWorld extends Group {
     const modifiedChunks = new Map<string, LoadedChunk>();
     const adjacentKeys = new Set<string>();
     const s = this.chunkSize;
+    const newIsFluid = blockRegistry.isFluid(newType);
 
     for (let x = minX; x <= maxX; x++) {
       const dx = (x + 0.5) - center.x;
@@ -1142,36 +1214,44 @@ export default class ProceduralWorld extends Group {
           const idx = ly * s * s + lz * s + lx;
           const currentType = chunk.data.blocks[idx];
 
-          if (blockRegistry.isSolid(currentType)) {
-            chunk.data.blocks[idx] = -1;
-            this.light.queueEdit(chunk, idx);
-            destroyed.push({ pos: new Vector3(x, y, z), blockType: currentType });
+          // 'destroy' remove solidos; 'fill' so ocupa vazio; 'paint' so troca material
+          // de quem ja existe. Assim o pincel nunca empareda o jogador por acidente nem
+          // apaga o relevo quando a intencao era repintar.
+          const applies =
+            mode === 'destroy' ? blockRegistry.isSolid(currentType)
+            : mode === 'fill'  ? currentType < 0
+            : currentType >= 0 && currentType !== newType;
+          if (!applies) continue;
 
-            // Atualiza buffers de borda se na borda do chunk
-            if (lx === 0 && chunk.borders.negX) {
-              chunk.borders.negX[ly * s + lz] = -1;
-              adjacentKeys.add(this.chunkKey(chunk.data.startX - s, chunk.data.startY, chunk.data.startZ));
-            }
-            if (lx === s - 1 && chunk.borders.posX) {
-              chunk.borders.posX[ly * s + lz] = -1;
-              adjacentKeys.add(this.chunkKey(chunk.data.startX + s, chunk.data.startY, chunk.data.startZ));
-            }
-            if (ly === 0 && chunk.borders.negY) {
-              chunk.borders.negY[lz * s + lx] = -1;
-              adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY - s, chunk.data.startZ));
-            }
-            if (ly === s - 1 && chunk.borders.posY) {
-              chunk.borders.posY[lz * s + lx] = -1;
-              adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY + s, chunk.data.startZ));
-            }
-            if (lz === 0 && chunk.borders.negZ) {
-              chunk.borders.negZ[ly * s + lx] = -1;
-              adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY, chunk.data.startZ - s));
-            }
-            if (lz === s - 1 && chunk.borders.posZ) {
-              chunk.borders.posZ[ly * s + lx] = -1;
-              adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY, chunk.data.startZ + s));
-            }
+          chunk.data.blocks[idx] = newType;
+          if (chunk.data.waterLevels) chunk.data.waterLevels[idx] = newIsFluid ? 255 : 0;
+          this.light.queueEdit(chunk, idx);
+          changed.push({ pos: new Vector3(x, y, z), blockType: currentType });
+
+          // Atualiza buffers de borda se na borda do chunk
+          if (lx === 0 && chunk.borders.negX) {
+            chunk.borders.negX[ly * s + lz] = newType;
+            adjacentKeys.add(this.chunkKey(chunk.data.startX - s, chunk.data.startY, chunk.data.startZ));
+          }
+          if (lx === s - 1 && chunk.borders.posX) {
+            chunk.borders.posX[ly * s + lz] = newType;
+            adjacentKeys.add(this.chunkKey(chunk.data.startX + s, chunk.data.startY, chunk.data.startZ));
+          }
+          if (ly === 0 && chunk.borders.negY) {
+            chunk.borders.negY[lz * s + lx] = newType;
+            adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY - s, chunk.data.startZ));
+          }
+          if (ly === s - 1 && chunk.borders.posY) {
+            chunk.borders.posY[lz * s + lx] = newType;
+            adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY + s, chunk.data.startZ));
+          }
+          if (lz === 0 && chunk.borders.negZ) {
+            chunk.borders.negZ[ly * s + lx] = newType;
+            adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY, chunk.data.startZ - s));
+          }
+          if (lz === s - 1 && chunk.borders.posZ) {
+            chunk.borders.posZ[ly * s + lx] = newType;
+            adjacentKeys.add(this.chunkKey(chunk.data.startX, chunk.data.startY, chunk.data.startZ + s));
           }
         }
       }
@@ -1190,7 +1270,12 @@ export default class ProceduralWorld extends Group {
       }
     }
 
-    return destroyed;
+    return changed;
+  }
+
+  /** Remove todos os solidos de uma esfera. Atalho de `editSphere(..., 'destroy')`. */
+  destroySphere(center: Vector3, radius: number): Array<{ pos: Vector3; blockType: number }> {
+    return this.editSphere(center, radius, 'destroy');
   }
 
   getEntityManager(): EntityManager {
