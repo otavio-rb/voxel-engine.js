@@ -31,6 +31,7 @@ import {
   ChunkWaterBorders
 } from '../types';
 import { EventEmitter } from '../core/EventEmitter';
+import { FrameProfiler } from '../core/FrameProfiler';
 import { EntityManager } from '../entities/EntityManager';
 import { DimensionDefinition, DEFAULT_DIMENSION } from '../dimension/Dimension';
 import { dimensionRegistry } from '../dimension/DimensionRegistry';
@@ -319,6 +320,18 @@ export default class ProceduralWorld extends Group {
 
   /** World lifecycle hooks, e.g. `chunk:ready` (payload: ChunkReadyEvent). */
   public readonly events = new EventEmitter();
+  /** Medidor de fases; o runtime injeta o dele para somar com o do quadro. */
+  public profiler: FrameProfiler | null = null;
+
+  /**
+   * Chunks gerados esperando costura de luz, e chunks pedidos esperando despacho.
+   *
+   * Os dois existiam como rajada sem orcamento: a costura rodava no callback de chegada do
+   * chunk, e `updateChunks` despachava TODOS os chunks desejados de uma vez (na primeira vez,
+   * mais de mil). Ambos na thread que renderiza.
+   */
+  private readonly stitchQueue: Array<{ key: string; presumedSky: boolean }> = [];
+  private readonly requestQueue: string[] = [];
 
   readonly params: WorldParams = {
     seed: Math.floor(Math.random() * 100_000),
@@ -912,13 +925,36 @@ export default class ProceduralWorld extends Group {
     }
 
     if (this.camera.position.distanceToSquared(this.lastUpdatePos) > 16) {
+        const uc = performance.now();
         this.updateChunks(false);
+        this.profiler?.add('chunks:desejados', performance.now() - uc);
         this.lastUpdatePos.copy(this.camera.position);
     }
 
     // Time budget to prevent main thread stutters (max ~12ms per frame for geometry processing)
     const tickStart = performance.now();
     const timeLimit = 6.0;
+
+    // 0a. Costura de luz dos chunks que chegaram, com orcamento proprio. Medido: 1.0 ms por
+    // chunk a 32^3 e 3.5 ms a 64^3 — barato sozinho, caro quando dez chegam no mesmo quadro.
+    const stitchStart = performance.now();
+    while (this.stitchQueue.length > 0 && (performance.now() - stitchStart) < 3.0) {
+      const pending = this.stitchQueue.shift()!;
+      const chunk = this.loadedChunks.get(pending.key);
+      if (!chunk) continue;
+      const [cx, cy, cz] = this.decodeKey(pending.key);
+      this.light.stitchChunk(chunk, this.neighborChunks(cx, cy, cz), pending.presumedSky);
+      this.afterChunkStitched(pending.key);
+    }
+    this.profiler?.add('luz:costura', performance.now() - stitchStart);
+
+    // 0b. Despacho de geracao, tambem com orcamento.
+    const requestStart = performance.now();
+    while (this.requestQueue.length > 0 && (performance.now() - requestStart) < 2.0) {
+      const key = this.requestQueue.pop()!;   // a fila esta ordenada do mais longe para o mais perto
+      if (!this.loadedChunks.has(key) && !this.pendingChunks.has(key)) this.requestChunk(key);
+    }
+    this.profiler?.add('chunk:pedido', performance.now() - requestStart);
 
     // 1. Process chunk meshes (from async rebuilds)
     while (this.rebuildMeshQueue.length > 0 && (performance.now() - tickStart) < timeLimit) {
@@ -944,7 +980,9 @@ export default class ProceduralWorld extends Group {
           creationTime = this.elapsedTime - 10.0;
         }
 
+        const applyStart = performance.now();
         this.applyChunkData(nextRebuild, creationTime);
+        this.profiler?.add('malha:aplicar', performance.now() - applyStart);
       }
     }
 
@@ -1475,11 +1513,15 @@ export default class ProceduralWorld extends Group {
       }
     }
 
-    const toRequest = Array.from(desired)
-      .filter(k => !this.loadedChunks.has(k) && !this.pendingChunks.has(k))
-      .sort((a, b) => this.keyDistanceNumeric(a, cx, cy, cz) - this.keyDistanceNumeric(b, cx, cy, cz));
-      
-    toRequest.forEach(k => this.requestChunk(k));
+    // Mais perto primeiro, e drenado com orcamento em `tick`: despachar tudo de uma vez era
+    // uma rajada de mais de mil jobs numa unica volta do laco de render.
+    this.requestQueue.length = 0;
+    for (const k of desired) {
+      if (!this.loadedChunks.has(k) && !this.pendingChunks.has(k)) this.requestQueue.push(k);
+    }
+    this.requestQueue.sort(
+      (a, b) => this.keyDistanceNumeric(b, cx, cy, cz) - this.keyDistanceNumeric(a, cx, cy, cz)
+    );
   }
 
   private requestChunk(key: string): void {
@@ -1584,20 +1626,31 @@ export default class ProceduralWorld extends Group {
         chunk.beforeLightWrite = () => this.materializeLight(chunk);
 
         this.loadedChunks.set(response.chunkKey, chunk);
-        const [cx, cy, cz] = this.decodeKey(response.chunkKey);
-        this.light.stitchChunk(chunk, this.neighborChunks(cx, cy, cz), !!response.light && this.presumesSky(cy));
+        const [, cy] = this.decodeKey(response.chunkKey);
+        // Costura adiada para o laco orcado de `tick`: ela roda na thread que renderiza, e
+        // varios chunks podem chegar no mesmo quadro.
+        this.stitchQueue.push({
+          key: response.chunkKey,
+          presumedSky: !!response.light && this.presumesSky(cy)
+        });
+        return;
     }
     
+    this.afterChunkStitched(response.chunkKey);
+  }
+
+  /** Enfileira a malha do chunk e dos seis vizinhos, depois que a luz dele foi costurada. */
+  private afterChunkStitched(key: string): void {
     if (this.chunkRenderer === 'raymarch') {
       // Sem malha e sem roundtrip de worker: a textura 3D E o dado do chunk.
-      const chunk = this.loadedChunks.get(response.chunkKey);
+      const chunk = this.loadedChunks.get(key);
       if (chunk) this.applyRaymarchChunk(chunk);
       return;
     }
 
     // Attempt to mesh this chunk and its existing neighbors.
-    this.checkAndQueueMeshing(response.chunkKey);
-    const [sx, sy, sz] = this.decodeKey(response.chunkKey);
+    this.checkAndQueueMeshing(key);
+    const [sx, sy, sz] = this.decodeKey(key);
     const endX = sx + this.chunkSize;
     const endY = sy + this.chunkSize;
     const endZ = sz + this.chunkSize;

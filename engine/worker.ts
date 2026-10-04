@@ -17,6 +17,7 @@ export { PostProcessor, type ScreenPass } from './render/PostProcessor';
 
 export { EventEmitter, type EventCallback } from './core/EventEmitter';
 export { GameLoop, type GameLoopOptions } from './core/GameLoop';
+export { FrameProfiler, type ProfilerSnapshot, type PhaseStats } from './core/FrameProfiler';
 
 export { BlockRegistry, blockRegistry, AIR, type BlockConfig } from './blocks/BlockRegistry';
 
