@@ -20,7 +20,7 @@ export { GameLoop, type GameLoopOptions } from './core/GameLoop';
 
 export { BlockRegistry, blockRegistry, AIR, type BlockConfig } from './blocks/BlockRegistry';
 
-export { default as ProceduralWorld, type ProceduralWorldOptions, type ChunkReadyEvent } from './world/ProceduralWorld';
+export { default as ProceduralWorld, type ProceduralWorldOptions, type ChunkReadyEvent, type SphereEditMode } from './world/ProceduralWorld';
 export { default as Sky } from './world/Sky';
 export type { WorldGenerator, ChunkContext } from './world/WorldGenerator';
 export { WorldGeneratorRegistry, worldGeneratorRegistry } from './world/WorldGeneratorRegistry';
