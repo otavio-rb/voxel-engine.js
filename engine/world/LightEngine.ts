@@ -14,6 +14,13 @@ export interface LightChunk {
   neighbors: Array<LightChunk | null>;
   /** Top was lit as open sky because nothing was loaded above. */
   assumedSky?: boolean;
+  /**
+   * Chamado antes de qualquer escrita em `light`. Existe para quem compartilha o array de
+   * luz entre chunks uniformes: o dono troca `light` por uma copia privada aqui, e a
+   * escrita seguinte nao vaza para os outros chunks. `setLevel` e o unico escritor, entao
+   * este e o unico ponto que precisa do gancho.
+   */
+  beforeLightWrite?: () => void;
 }
 
 const SKY = 0;
@@ -357,6 +364,7 @@ export class LightEngine {
   }
 
   private setLevel(chunk: LightChunk, index: number, channel: Channel, level: number): void {
+    chunk.beforeLightWrite?.();
     const v = chunk.light[index];
     chunk.light[index] = channel === SKY ? (level << 4) | (v & 0x0f) : (v & 0xf0) | level;
     if (this.trackDirty) this.markDirty(chunk, index);
