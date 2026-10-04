@@ -134,6 +134,18 @@ export interface WorkerResponse {
   water?: GeometryData;
   /** Chunk-local light, when the job asked for `computeLight`. */
   light?: Uint8Array;
+  /**
+   * Valor do bloco quando o chunk inteiro e um unico bloco, senao undefined.
+   *
+   * Num mundo de minivoxels a maioria esmagadora dos chunks e uniforme (ceu puro ou
+   * subsolo puro): medido neste projeto, de 68% a 90% conforme a distancia de render
+   * cresce. Informar isso deixa a main thread apontar para arrays compartilhados em vez
+   * de guardar uma copia por chunk, o que e a diferenca entre 1.270 MB e ~210 MB para uma
+   * visao de 32x16 blocos.
+   */
+  uniform?: number;
+  /** Idem para a luz empacotada: valor unico quando toda a celula tem a mesma luz. */
+  uniformLight?: number;
 }
 
 export interface WorldConfig {

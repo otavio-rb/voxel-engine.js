@@ -64,6 +64,25 @@ export interface ProceduralWorldOptions extends WorldConfig {
    */
   voxelEdge?: number;
   /**
+   * Distancia, em BLOCOS, onde o contorno de voxel desaparece por completo (comeca a sumir
+   * a 35% dela). Default 20 blocos.
+   *
+   * Nao e so estetica: o contorno e a unica pista de escala numa superficie plana, porque o
+   * greedy meshing funde a parede num quad unico. Se ele apaga perto, o mundo volta a
+   * parecer feito de blocos grandes a poucos metros do jogador. Longe demais e o outro
+   * extremo: um grid de 1 voxel menor que um pixel vira moire.
+   */
+  voxelEdgeFadeBlocks?: number;
+  /**
+   * Chunks uniformes (ar puro, solido puro) compartilham um array por valor em vez de cada um
+   * guardar a sua copia, com copy-on-write na escrita. Default true: a semantica e identica e
+   * a economia e grande (68% a 90% dos chunks sao uniformes conforme a distancia cresce).
+   *
+   * Existe para desligar em depuracao. Se algum dia aparecer bloco surgindo em lugar errado
+   * pelo mundo, e aqui que se confirma ou se descarta a hipotese numa troca de flag.
+   */
+  shareUniformChunks?: boolean;
+  /**
    * Faixa vertical do mundo, em chunks: `[minChunkY, maxChunkY]`. Default `[-32, 8]`, que e
    * a faixa do mundo classico (chunks de 16 voxels). Um mundo com outro chunkSize ou outra
    * escala de voxel precisa da sua propria faixa, senao o teto cai no lugar errado.
@@ -104,6 +123,10 @@ interface LoadedChunk extends LightChunk {
   hasAnimated?: boolean;
   animationStartTime?: number;
   readyNotified?: boolean;
+  /** `data.blocks`/`waterLevels`/`borders` sao compartilhados; escrever exige materializar. */
+  sharedBlocks?: boolean;
+  /** `light` e compartilhado; idem. */
+  sharedLight?: boolean;
   /** Passo de LOD da malha atual (1 = resolucao cheia); undefined enquanto nao houver malha. */
   lod?: number;
 }
@@ -127,6 +150,7 @@ const VOXEL_SHADING_GLSL = /* glsl */ `
 
   uniform float uVoxelGrain;
   uniform float uVoxelEdge;
+  uniform float uVoxelEdgeFade;
 
   float voxelHash(vec3 p) {
     p = fract(p * 0.3183099 + 0.1);
@@ -150,7 +174,7 @@ const VOXEL_SHADING_GLSL = /* glsl */ `
     float d = max(max(f.x * planeMask.x, f.y * planeMask.y), f.z * planeMask.z);
     float line = smoothstep(0.40, 0.5, d);
     float dist = length(p - cameraPosition);
-    float fade = 1.0 - smoothstep(uFogNear * 0.12, uFogNear * 0.45, dist);
+    float fade = 1.0 - smoothstep(uVoxelEdgeFade * 0.35, uVoxelEdgeFade, dist);
     return line * fade;
   }
 
@@ -208,10 +232,22 @@ export default class ProceduralWorld extends Group {
   // ─── Voxel lighting ───────────────────────────────────────────────────────
   private readonly light: LightEngine;
   private readonly openSkyMinY: number;
+
+  // ─── Chunks uniformes ─────────────────────────────────────────────────────
+  // Um chunk de ar puro ou de solido puro nao precisa da sua propria copia de 32 KB: todos
+  // apontam para o mesmo array por valor, e quem escreve materializa uma copia privada
+  // primeiro (copy-on-write). Medido neste projeto, 68% a 90% dos chunks carregados sao
+  // uniformes, e e isso que torna possivel carregar longe nos tres eixos.
+  private readonly sharedBlocksByValue = new Map<number, Int8Array>();
+  private readonly sharedSliceByValue  = new Map<number, Int8Array>();
+  private readonly sharedWaterZero: Uint8Array;
+  private readonly sharedLightByValue  = new Map<number, Uint8Array>();
   /** Limites de distancia (em chunks) de cada anel de LOD; vazio = sempre resolucao cheia. */
   private readonly lodRings: number[];
   private readonly voxelGrain: number;
   private readonly voxelEdge: number;
+  private readonly voxelEdgeFadeBlocks: number;
+  private readonly shareUniformChunks: boolean;
   private readonly chunkYMin: number;
   private readonly chunkYMax: number;
   private readonly surfacePinRange: [number, number] | null;
@@ -271,6 +307,8 @@ export default class ProceduralWorld extends Group {
     this.voxelsPerBlock = config.voxelsPerBlock ?? 1;
     this.voxelGrain = config.voxelGrain ?? 0.06;
     this.voxelEdge = config.voxelEdge ?? 0.0;
+    this.voxelEdgeFadeBlocks = config.voxelEdgeFadeBlocks ?? 20.0;
+    this.shareUniformChunks = config.shareUniformChunks ?? true;
     this.chunkSize      = config.chunkSize;
     this.chunkHeight    = config.chunkHeight; // Kept for backwards compatibility but not used for mesh height
     this.renderDistance = config.renderDistance;
@@ -291,6 +329,7 @@ export default class ProceduralWorld extends Group {
     
     this.entityManager = new EntityManager(this);
     this.light = new LightEngine(this.chunkSize);
+    this.sharedWaterZero = new Uint8Array(this.chunkSize ** 3);
     this.openSkyMinY = config.openSkyMinY ?? 0;
     [this.chunkYMin, this.chunkYMax] = config.chunkYRange ?? [-32, 8];
     this.surfacePinRange = config.surfacePinRange === undefined ? [0, 7] : config.surfacePinRange;
@@ -316,6 +355,7 @@ export default class ProceduralWorld extends Group {
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
         uVoxelGrain:     { value: this.voxelGrain },
         uVoxelEdge:      { value: this.voxelEdge },
+        uVoxelEdgeFade:  { value: this.voxelEdgeFadeBlocks * this.voxelsPerBlock },
       },
       vertexShader: `
         attribute float creationTime;
@@ -418,6 +458,7 @@ export default class ProceduralWorld extends Group {
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
         uVoxelGrain:     { value: this.voxelGrain },
         uVoxelEdge:      { value: this.voxelEdge },
+        uVoxelEdgeFade:  { value: this.voxelEdgeFadeBlocks * this.voxelsPerBlock },
         uStormChoppiness: { value: 0.0 },
       },
       vertexShader: `
@@ -975,6 +1016,8 @@ export default class ProceduralWorld extends Group {
     const key = this.keyForBlock(bx, by, bz);
     const chunk = this.loadedChunks.get(key);
     if (!chunk) return;
+    // Escrever num chunk uniforme exige copia privada primeiro (ver materializeBlocks).
+    this.materializeBlocks(chunk);
 
     const lx = bx - chunk.data.startX;
     const ly = by - chunk.data.startY;
@@ -1048,6 +1091,8 @@ export default class ProceduralWorld extends Group {
     const key = this.keyForBlock(bx, by, bz);
     const chunk = this.loadedChunks.get(key);
     if (!chunk) return;
+    // Escrever num chunk uniforme exige copia privada primeiro (ver materializeBlocks).
+    this.materializeBlocks(chunk);
     const lx = bx - chunk.data.startX;
     const ly = by - chunk.data.startY;
     const lz = bz - chunk.data.startZ;
@@ -1089,6 +1134,9 @@ export default class ProceduralWorld extends Group {
         continue;
       }
 
+      // stepChunk guarda waterLevels numa variavel local e escreve nela: materializar
+      // depois da chamada seria tarde.
+      this.materializeBlocks(chunk);
       const result = WaterSimulator.stepChunk(chunk.data, this.chunkSize, waterAccess);
 
       if (result.hasChanged) {
@@ -1204,7 +1252,11 @@ export default class ProceduralWorld extends Group {
           let chunk = modifiedChunks.get(key);
           if (!chunk) {
             chunk = this.loadedChunks.get(key);
-            if (chunk) modifiedChunks.set(key, chunk);
+            if (chunk) {
+              // Uma vez por chunk do lote, nao por voxel.
+              this.materializeBlocks(chunk);
+              modifiedChunks.set(key, chunk);
+            }
           }
           if (!chunk) continue;
 
@@ -1402,6 +1454,58 @@ export default class ProceduralWorld extends Group {
     );
   }
 
+  private sharedBlocksFor(value: number): Int8Array {
+    let arr = this.sharedBlocksByValue.get(value);
+    if (!arr) {
+      arr = new Int8Array(this.chunkSize ** 3).fill(value);
+      this.sharedBlocksByValue.set(value, arr);
+    }
+    return arr;
+  }
+
+  private sharedSliceFor(value: number): Int8Array {
+    let arr = this.sharedSliceByValue.get(value);
+    if (!arr) {
+      arr = new Int8Array(this.chunkSize ** 2).fill(value);
+      this.sharedSliceByValue.set(value, arr);
+    }
+    return arr;
+  }
+
+  private sharedLightFor(value: number): Uint8Array {
+    let arr = this.sharedLightByValue.get(value);
+    if (!arr) {
+      arr = new Uint8Array(this.chunkSize ** 3).fill(value);
+      this.sharedLightByValue.set(value, arr);
+    }
+    return arr;
+  }
+
+  /**
+   * Da ao chunk copias privadas de blocks, waterLevels e das seis fatias de fronteira.
+   *
+   * Precisa ser chamado antes de QUALQUER escrita nesses arrays: enquanto `sharedBlocks`
+   * esta marcado, eles sao os arrays compartilhados por valor, e escrever neles apareceria
+   * em todo chunk uniforme do mesmo valor no mundo.
+   */
+  private materializeBlocks(chunk: LoadedChunk): void {
+    if (!chunk.sharedBlocks) return;
+    chunk.sharedBlocks = false;
+    chunk.data.blocks = new Int8Array(chunk.data.blocks);
+    chunk.data.waterLevels = new Uint8Array(chunk.data.waterLevels);
+    for (const key of ['negX', 'posX', 'negY', 'posY', 'negZ', 'posZ'] as const) {
+      const slice = chunk.borders[key];
+      if (slice) chunk.borders[key] = new Int8Array(slice);
+    }
+  }
+
+  /** Copia privada do array de luz. Chamado pelo gancho `beforeLightWrite`. */
+  private materializeLight(chunk: LoadedChunk): void {
+    if (!chunk.sharedLight) return;
+    chunk.sharedLight = false;
+    chunk.light = new Uint8Array(chunk.light);
+  }
+
   private onChunkReady(response: WorkerResponse): void {
     this.pendingChunks.delete(response.chunkKey);
     if (!this.loadedChunks.has(response.chunkKey)) {
@@ -1414,6 +1518,25 @@ export default class ProceduralWorld extends Group {
             light: response.light ?? this.light.createLightArray(),
             neighbors: [null, null, null, null, null, null]
         };
+
+        if (this.shareUniformChunks && response.uniform !== undefined) {
+          const v = response.uniform;
+          chunk.data.blocks = this.sharedBlocksFor(v);
+          chunk.data.waterLevels = this.sharedWaterZero;
+          chunk.borders = {
+            negX: this.sharedSliceFor(v), posX: this.sharedSliceFor(v),
+            negY: this.sharedSliceFor(v), posY: this.sharedSliceFor(v),
+            negZ: this.sharedSliceFor(v), posZ: this.sharedSliceFor(v)
+          };
+          chunk.sharedBlocks = true;
+
+          if (response.uniformLight !== undefined) {
+            chunk.light = this.sharedLightFor(response.uniformLight);
+            chunk.sharedLight = true;
+          }
+        }
+        chunk.beforeLightWrite = () => this.materializeLight(chunk);
+
         this.loadedChunks.set(response.chunkKey, chunk);
         const [cx, cy, cz] = this.decodeKey(response.chunkKey);
         this.light.stitchChunk(chunk, this.neighborChunks(cx, cy, cz), !!response.light && this.presumesSky(cy));

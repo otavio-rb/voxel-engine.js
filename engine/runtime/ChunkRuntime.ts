@@ -77,8 +77,9 @@ function handleJob(job: ChunkJobData): void {
   // nao recebem malha. Vale pouco no voxel classico e vale tudo em minivoxel: a maioria
   // esmagadora dos chunks cai nesse caso, e o greedy meshing custa O(size^3 * 6) mesmo
   // quando o resultado e vazio.
+  const uniform = uniformValue(chunkDataResult.blocks);
   const needsMesh = job.buildMesh !== false
-    && !hasNoVisibleFaces(chunkDataResult.blocks, job.neighbourBorderBlocks, job.size);
+    && !hasNoVisibleFaces(uniform, job.neighbourBorderBlocks, job.size);
 
   const geometry = needsMesh
       ? buildGeometry(chunkDataResult, job)
@@ -89,6 +90,11 @@ function handleJob(job: ChunkJobData): void {
     ? getLightEngine(job.size).computeLocal(chunkDataResult.blocks, job.presumeSky ?? false)
     : undefined;
 
+  // Compartilhar so vale para ar e solido: um chunk uniforme de fluido e simulado, e
+  // simulacao escreve no array.
+  const shareable = uniform !== null && !blockRegistry.isFluid(uniform);
+  const uniformLight = light ? uniformValue(light) : null;
+
   const response: WorkerResponse = {
     chunkKey:  job.chunkKey,
     chunkData: chunkDataResult,
@@ -96,6 +102,8 @@ function handleJob(job: ChunkJobData): void {
     opaque:    geometry?.opaque,
     water:     geometry?.water,
     light,
+    uniform:      shareable ? uniform! : undefined,
+    uniformLight: shareable && uniformLight !== null ? uniformLight : undefined,
   };
 
   // Transfer the ArrayBuffers instead of copying them (zero-copy).
@@ -138,16 +146,23 @@ function handleJob(job: ChunkJobData): void {
   (self as any).postMessage(response, transferables);
 }
 
+/** Valor unico de um volume, ou null se houver mais de um. */
+function uniformValue(arr: Int8Array | Uint8Array): number | null {
+  const first = arr[0];
+  for (let i = 1; i < arr.length; i++) {
+    if (arr[i] !== first) return null;
+  }
+  return first;
+}
+
 /**
  * True quando o chunk nao pode produzir uma unica face: ou e ar puro, ou e um unico
  * bloco opaco cercado por fronteiras opacas nos seis vizinhos. Um vizinho desconhecido
  * conta como possivel face, para nunca abrir buraco no mundo.
  */
-function hasNoVisibleFaces(blocks: Int8Array, borders: ChunkBorders, size: number): boolean {
-  const first = blocks[0];
-  for (let i = 1; i < blocks.length; i++) {
-    if (blocks[i] !== first) return false;
-  }
+function hasNoVisibleFaces(uniform: number | null, borders: ChunkBorders, size: number): boolean {
+  if (uniform === null) return false;
+  const first = uniform;
 
   if (first < 0) return true;                       // ar puro
   if (!blockRegistry.isOpaque(first)) return false; // agua/vidro uniforme ainda rende superficie

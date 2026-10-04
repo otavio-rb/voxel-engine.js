@@ -106,6 +106,15 @@ export default class Player {
   private readonly keys: Record<string, boolean> = {};
   /** Voxels por bloco; 1 no voxel classico. Ver PlayerOptions.voxelsPerBlock. */
   public readonly voxelsPerBlock: number;
+  /**
+   * Velocidade de voo livre, em unidades de mundo por tick de 50 ms. Default: o valor do
+   * MC 1.8 escalado (1.8 blocos/tick, ~36 blocos/s).
+   *
+   * Vale ajustar quando a distancia de carregamento e curta em blocos, o que e o caso de
+   * um mundo de minivoxels: voar 36 blocos/s num raio carregado de 32 blocos significa
+   * cruzar o mundo inteiro em menos de um segundo, e o streaming nunca alcança.
+   */
+  public flySpeed: number;
   private readonly mv: MovementTable;
   private readonly dimensions: { width: number; height: number; eyeHeight: number };
   private canMove = true;
@@ -149,6 +158,7 @@ export default class Player {
   constructor({ camera, world, mode = 'debug', voxelsPerBlock = 1 }: PlayerOptions) {
     this.voxelsPerBlock = voxelsPerBlock;
     this.mv = scaleMovement(voxelsPerBlock);
+    this.flySpeed = this.mv.FLY_SPEED;
     this.dimensions = {
       width:     0.6 * voxelsPerBlock,
       height:    1.8 * voxelsPerBlock,
@@ -395,9 +405,9 @@ export default class Player {
     if (dir.lengthSq() > 0) dir.normalize();
 
     const pos = this.body.position;
-    pos.addScaledVector(dir, this.mv.FLY_SPEED).add(this.pendingExternal);
-    if (this.keys[' ']) pos.y += this.mv.FLY_SPEED;
-    if (this.keys['shift'] || this.keys['control']) pos.y -= this.mv.FLY_SPEED;
+    pos.addScaledVector(dir, this.flySpeed).add(this.pendingExternal);
+    if (this.keys[' ']) pos.y += this.flySpeed;
+    if (this.keys['shift'] || this.keys['control']) pos.y -= this.flySpeed;
     this.sprinting = false;
     this.sneaking = false;
     this.updateBobbing();

@@ -43,6 +43,13 @@ export class BlockRegistry {
     return BlockRegistry.instance;
   }
 
+  /**
+   * Cache de `fluid` indexado por id. `isFluid` e chamado uma vez por voxel dentro de
+   * `ChunkData.setBlock`, e um `Map.get` por voxel custava ~1.1 ms por chunk de 262 mil
+   * voxels contra ~0.2 ms com acesso indexado. Ids de bloco cabem em 0..127 (Int8Array).
+   */
+  private readonly fluidFlags = new Uint8Array(128);
+
   public register(config: BlockConfig): void {
     const isSpecial = config.meshType === 'microvoxel' || config.meshType === 'cross';
     const fullConfig: BlockConfig = {
@@ -67,6 +74,9 @@ export class BlockRegistry {
 
     this.blocks.set(fullConfig.id, fullConfig);
     this.nameToId.set(fullConfig.name.toLowerCase(), fullConfig.id);
+    if (fullConfig.id >= 0 && fullConfig.id < this.fluidFlags.length) {
+      this.fluidFlags[fullConfig.id] = fullConfig.fluid ? 1 : 0;
+    }
   }
 
   public get(id: number): BlockConfig | undefined {
@@ -92,6 +102,7 @@ export class BlockRegistry {
 
   public isFluid(id: number): boolean {
     if (id < 0) return false;
+    if (id < this.fluidFlags.length) return this.fluidFlags[id] === 1;
     const block = this.blocks.get(id);
     return block ? (block.fluid ?? false) : false;
   }
