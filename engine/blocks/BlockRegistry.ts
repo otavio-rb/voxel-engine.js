@@ -31,6 +31,20 @@ export interface BlockConfig {
   meshType?: 'cube' | 'microvoxel' | 'cross';
 }
 
+/** Ids de bloco cabem em 0..127 porque o volume e Int8Array; 256 da folga sem custo. */
+const BLOCK_TABLE_SIZE = 256;
+
+// Nove flags, por isso Uint16Array e nao Uint8Array: com oito bits o ultimo nao cabia.
+const F_REGISTERED  = 1 << 0;
+const F_SOLID       = 1 << 1;
+const F_OPAQUE      = 1 << 2;
+const F_FLUID       = 1 << 3;
+const F_AIR         = 1 << 4;
+const F_TRANSPARENT = 1 << 5;
+const F_SWIMMABLE   = 1 << 6;
+const F_MICROVOXEL  = 1 << 7;
+const F_FLOWS       = 1 << 8;
+
 export class BlockRegistry {
   private static instance: BlockRegistry | null = null;
   private blocks: Map<number, BlockConfig> = new Map();
@@ -44,11 +58,25 @@ export class BlockRegistry {
   }
 
   /**
-   * Cache de `fluid` indexado por id. `isFluid` e chamado uma vez por voxel dentro de
-   * `ChunkData.setBlock`, e um `Map.get` por voxel custava ~1.1 ms por chunk de 262 mil
-   * voxels contra ~0.2 ms com acesso indexado. Ids de bloco cabem em 0..127 (Int8Array).
+   * Propriedades de bloco em tabelas indexadas por id, em vez de `Map.get` por consulta.
+   *
+   * Isto esta no caminho mais quente da engine. Medido num chunk 32^3 de subsolo, que produz
+   * ZERO quads: o greedy meshing levava 18.6 ms, dominado pelo trabalho por celula e nao pela
+   * geometria. A varredura visita 6 faces x 32 camadas x 32x32 = 196 mil celulas e consulta o
+   * registro varias vezes em cada uma (no arquivo: isSolid 7 vezes, isFluid 6, isAir 4), e um
+   * `Map.get` por consulta custa ~1.1 ms por 262 mil chamadas contra ~0.2 ms indexado.
+   *
+   * O bit F_REGISTERED preserva a semantica exata de id nao registrado, que difere por
+   * acessor: `isTransparent` devolve true, `getSlipperiness` devolve o default, os outros
+   * devolvem false.
    */
-  private readonly fluidFlags = new Uint8Array(128);
+  private readonly flags = new Uint16Array(BLOCK_TABLE_SIZE);
+  private readonly lightOpacityTable = new Uint8Array(BLOCK_TABLE_SIZE);
+  private readonly lightEmissionTable = new Uint8Array(BLOCK_TABLE_SIZE);
+  // Float64 e nao Float32: slipperiness entra na formula de movimento, e em Float32 o 0.6
+  // padrao viraria 0.6000000238418579, mudando a fisica nos ultimos bits sem motivo.
+  private readonly slipperinessTable = new Float64Array(BLOCK_TABLE_SIZE);
+  private readonly colorTable = new Uint32Array(BLOCK_TABLE_SIZE);
 
   public register(config: BlockConfig): void {
     const isSpecial = config.meshType === 'microvoxel' || config.meshType === 'cross';
@@ -74,9 +102,40 @@ export class BlockRegistry {
 
     this.blocks.set(fullConfig.id, fullConfig);
     this.nameToId.set(fullConfig.name.toLowerCase(), fullConfig.id);
-    if (fullConfig.id >= 0 && fullConfig.id < this.fluidFlags.length) {
-      this.fluidFlags[fullConfig.id] = fullConfig.fluid ? 1 : 0;
-    }
+    this.cache(fullConfig);
+  }
+
+  /** Preenche as tabelas indexadas para um bloco recem-registrado. */
+  private cache(b: BlockConfig): void {
+    const id = b.id;
+    if (id < 0 || id >= BLOCK_TABLE_SIZE) return;
+
+    const special = b.meshType === 'microvoxel' || b.meshType === 'cross';
+    let f = F_REGISTERED;
+    if (b.solid ?? true) f |= F_SOLID;
+    if (b.opaque ?? true) f |= F_OPAQUE;
+    if (b.fluid ?? false) f |= F_FLUID;
+    if (b.air ?? false) f |= F_AIR;
+    if (b.transparent ?? false) f |= F_TRANSPARENT;
+    if (b.swimmable ?? false) f |= F_SWIMMABLE;
+    if (b.flows ?? false) f |= F_FLOWS;
+    if (special) f |= F_MICROVOXEL;
+    this.flags[id] = f;
+
+    this.lightOpacityTable[id] =
+      b.lightOpacity !== undefined ? b.lightOpacity
+      : b.air ? 0
+      : b.opaque ? 15
+      : b.fluid ? 2
+      : 1;
+    this.lightEmissionTable[id] = Math.max(0, Math.min(15, Math.round((b.luminance ?? 0) * 15)));
+    this.slipperinessTable[id] = b.slipperiness ?? DEFAULT_SLIPPERINESS;
+    this.colorTable[id] = b.color;
+  }
+
+  /** True quando o id tem entrada nas tabelas indexadas. */
+  private cached(id: number): boolean {
+    return id >= 0 && id < BLOCK_TABLE_SIZE && (this.flags[id] & F_REGISTERED) !== 0;
   }
 
   public get(id: number): BlockConfig | undefined {
@@ -90,73 +149,62 @@ export class BlockRegistry {
 
   public isSolid(id: number): boolean {
     if (id < 0) return false;
-    const block = this.blocks.get(id);
-    return block ? (block.solid ?? true) : false;
+    return (this.flags[id] & (F_REGISTERED | F_SOLID)) === (F_REGISTERED | F_SOLID);
   }
 
   public isOpaque(id: number): boolean {
     if (id < 0) return false;
-    const block = this.blocks.get(id);
-    return block ? (block.opaque ?? true) : false;
+    return (this.flags[id] & (F_REGISTERED | F_OPAQUE)) === (F_REGISTERED | F_OPAQUE);
   }
 
   public isFluid(id: number): boolean {
     if (id < 0) return false;
-    if (id < this.fluidFlags.length) return this.fluidFlags[id] === 1;
-    const block = this.blocks.get(id);
-    return block ? (block.fluid ?? false) : false;
+    return (this.flags[id] & (F_REGISTERED | F_FLUID)) === (F_REGISTERED | F_FLUID);
   }
 
   /** Light lost when entering the block (0-15); see `BlockConfig.lightOpacity`. */
   public getLightOpacity(id: number): number {
-    if (id < 0) return 0;
-    const block = this.blocks.get(id);
-    if (!block) return 0;
-    if (block.lightOpacity !== undefined) return block.lightOpacity;
-    if (block.air) return 0;
-    if (block.opaque) return 15;
-    if (block.fluid) return 2;
-    return 1;
+    if (id < 0 || !this.cached(id)) return 0;
+    return this.lightOpacityTable[id];
   }
 
   /** Block light level (0-15) emitted by the block, from its luminance (0-1). */
   public getLightEmission(id: number): number {
-    if (id < 0) return 0;
-    const luminance = this.blocks.get(id)?.luminance ?? 0;
-    return Math.max(0, Math.min(15, Math.round(luminance * 15)));
+    if (id < 0 || !this.cached(id)) return 0;
+    return this.lightEmissionTable[id];
   }
 
   public getSlipperiness(id: number): number {
-    if (id < 0) return DEFAULT_SLIPPERINESS;
-    return this.blocks.get(id)?.slipperiness ?? DEFAULT_SLIPPERINESS;
+    if (id < 0 || !this.cached(id)) return DEFAULT_SLIPPERINESS;
+    return this.slipperinessTable[id];
   }
 
   public flows(id: number): boolean {
     if (id < 0) return false;
-    return this.blocks.get(id)?.flows ?? false;
+    return (this.flags[id] & (F_REGISTERED | F_FLOWS)) === (F_REGISTERED | F_FLOWS);
   }
 
   public isSwimmable(id: number): boolean {
     if (id < 0) return false;
-    return this.blocks.get(id)?.swimmable ?? false;
+    return (this.flags[id] & (F_REGISTERED | F_SWIMMABLE)) === (F_REGISTERED | F_SWIMMABLE);
   }
 
   /** True for empty space: negative IDs and blocks registered with `air: true`. */
   public isAir(id: number): boolean {
     if (id < 0) return true;
-    return this.blocks.get(id)?.air ?? false;
+    return (this.flags[id] & (F_REGISTERED | F_AIR)) === (F_REGISTERED | F_AIR);
   }
 
   public isTransparent(id: number): boolean {
     if (id < 0) return true;
-    const block = this.blocks.get(id);
-    return block ? (block.transparent ?? false) : true;
+    // Id desconhecido conta como transparente, como antes: e o lado seguro para o culling.
+    if (!this.cached(id)) return true;
+    return (this.flags[id] & F_TRANSPARENT) !== 0;
   }
 
   public isMicrovoxel(id: number): boolean {
     if (id < 0) return false;
-    const block = this.blocks.get(id);
-    return block ? block.meshType === 'microvoxel' || block.meshType === 'cross' : false;
+    return (this.flags[id] & (F_REGISTERED | F_MICROVOXEL)) === (F_REGISTERED | F_MICROVOXEL);
   }
 
   public isCrossMesh(id: number): boolean {
@@ -170,8 +218,7 @@ export class BlockRegistry {
   }
 
   public getColor(id: number): number {
-    const block = this.blocks.get(id);
-    return block ? block.color : 0xffffff;
+    return this.cached(id) ? this.colorTable[id] : 0xffffff;
   }
 
   public getAll(): BlockConfig[] {
