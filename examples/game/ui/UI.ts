@@ -1,4 +1,4 @@
-import { blockRegistry, BlockConfig } from '../../engine/blocks/BlockRegistry';
+import { blockRegistry, BlockConfig } from '@voxel/engine';
 
 export interface UIStats {
   x: number; y: number; z: number;

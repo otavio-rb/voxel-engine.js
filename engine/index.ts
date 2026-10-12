@@ -10,3 +10,4 @@ export {
   type BlockPlaceEvent
 } from './core/VoxelEngine';
 export { EventEmitter, type EventCallback } from './core/EventEmitter';
+export { blockRegistry, BlockRegistry, type BlockConfig } from './blocks/BlockRegistry';

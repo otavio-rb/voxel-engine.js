@@ -17,5 +17,5 @@
       "@voxel/engine/chunk-worker": ["engine/chunk-worker.ts"]
     }
   },
-  "include": ["engine", "game"]
+  "include": ["engine", "examples"]
 }

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "check:boundary": "node scripts/check-engine-boundary.mjs",
     "check:shared": "node scripts/check-shared-chunk-writes.mjs",
-    "check": "npm run typecheck && npm run check:boundary && npm run check:shared"
+    "check": "npm run typecheck && npm run check:boundary && npm run check:shared",
+    "server": "node examples/game/server/index.js"
   },
   "devDependencies": {
     "typescript": "^5.6.3",
