@@ -10,16 +10,48 @@ export interface VoxelEngineOptions {
   worker: Worker;
 }
 
+export interface WorkerPoolStats {
+  total: number;
+  idle: number;
+  busy: number;
+  queued: number;
+}
+
+export interface WorkerMemoryStats {
+  usedMB: number;
+  totalMB: number;
+  limitMB: number;
+}
+
 export interface EngineStats {
   x: number;
   y: number;
   z: number;
+  chunkX?: number;
+  chunkY?: number;
+  chunkZ?: number;
+  yaw?: number;
+  pitch?: number;
+  facing?: string;
   geometries: number;
   textures: number;
   frame: number;
   calls: number;
   triangles: number;
   isUnderwater: boolean;
+  fps: number;
+  frameTimeMs: number;
+  renderTimeMs: number;
+  worstFrameMs?: number;
+  cores: number;
+  gpuRenderer: string;
+  gpuTotalVram?: string;
+  gpuMemoryMB: number;
+  voxelRamMB?: number;
+  workerMemory?: WorkerMemoryStats;
+  workers: WorkerPoolStats;
+  loadedChunks: number;
+  dimension: string;
 }
 
 export interface BlockBreakEvent {
@@ -71,6 +103,22 @@ export class VoxelEngine extends EventEmitter {
       [offscreen]
     );
 
+    this.worker.onerror = (e: any) => {
+      console.error('[VoxelEngine] Engine Worker error:', {
+        type: e?.type,
+        message: e?.message,
+        filename: e?.filename,
+        lineno: e?.lineno,
+        colno: e?.colno,
+        error: e?.error
+      });
+      if (!e?.message) {
+        console.warn('[VoxelEngine] Dica: Se e.message for undefined, o navegador ou uma extensão (ex: Brave Shields ou CSP) bloqueou o carregamento do Worker em localhost.');
+      }
+    };
+    this.worker.onmessageerror = (e: MessageEvent) => {
+      console.error('[VoxelEngine] Worker messageerror (não foi possível deserializar/transferir):', e);
+    };
     this.setupWorkerMessaging();
     this.setupInputListeners();
   }
@@ -118,9 +166,17 @@ export class VoxelEngine extends EventEmitter {
     this.worker.postMessage({ type: 'mousedown', payload: { button } });
   }
 
+  public sendMouseUp(button: number): void {
+    this.worker.postMessage({ type: 'mouseup', payload: { button } });
+  }
+
+  public sendMessage<T = any>(name: string, data?: T): void {
+    this.worker.postMessage({ type: 'message', payload: { name, data } });
+  }
+
   public start(config?: {
     worldType?: string;
-    mode?: 'creative' | 'survival';
+    flight?: boolean;
     shaders?: boolean;
   }): void {
     this.isStarted = true;
@@ -132,8 +188,8 @@ export class VoxelEngine extends EventEmitter {
       this.sendCommand('/regen', [config.worldType]);
     }
 
-    if (config?.mode) {
-      this.sendCommand(config.mode === 'creative' ? '/creative' : '/survival');
+    if (typeof config?.flight === 'boolean') {
+      this.sendCommand(config.flight ? '/fly' : '/walk');
     }
 
     if (typeof config?.shaders === 'boolean') {
@@ -214,8 +270,9 @@ export class VoxelEngine extends EventEmitter {
     this.worker.postMessage({ type: 'message', payload: { name, data } });
   }
 
-  public setGameMode(mode: 'creative' | 'survival'): void {
-    this.sendCommand(mode === 'creative' ? '/creative' : '/survival');
+  /** Toggles noclip flight (no gravity or collision) versus normal physics-driven walking. */
+  public setFlightMode(enabled: boolean): void {
+    this.sendCommand(enabled ? '/fly' : '/walk');
   }
 
   public toggleShaders(enabled: boolean): void {
@@ -239,7 +296,9 @@ export class VoxelEngine extends EventEmitter {
       } else if (type === 'event') {
         this.emit(e.data.event, payload);
       } else if (type === 'selection_change') {
-        this.emit('selection_change', payload?.type);
+        this.emit('selection_change', payload);
+      } else if (type === 'fatal_error' || type === 'worker_error') {
+        console.error('[VoxelEngine] Worker Fatal Error (detalhado):', payload);
       }
     };
   }
@@ -308,6 +367,12 @@ export class VoxelEngine extends EventEmitter {
     document.addEventListener('mousedown', onMouseDown);
     this.cleanupListeners.push(() => document.removeEventListener('mousedown', onMouseDown));
 
+    const onMouseUp = (e: MouseEvent) => {
+      this.worker.postMessage({ type: 'mouseup', payload: { button: e.button } });
+    };
+    document.addEventListener('mouseup', onMouseUp);
+    this.cleanupListeners.push(() => document.removeEventListener('mouseup', onMouseUp));
+
     // Previne menu de contexto com clique direito quando travado
     const onContextMenu = (e: MouseEvent) => {
       if (this.isLocked) {
@@ -323,6 +388,11 @@ export class VoxelEngine extends EventEmitter {
       const wasLocked = this.isLocked;
       this.isLocked = document.pointerLockElement === this.canvas;
       this.isLocking = false;
+
+      if (!this.isLocked) {
+        this.worker.postMessage({ type: 'mouseup', payload: { button: 0 } });
+        this.worker.postMessage({ type: 'mouseup', payload: { button: 2 } });
+      }
 
       this.worker.postMessage({ type: 'lock_state', payload: { isLocked: this.isLocked } });
       this.emit('lock_change', { isLocked: this.isLocked, wasLocked });

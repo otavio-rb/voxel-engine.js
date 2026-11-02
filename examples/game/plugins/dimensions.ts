@@ -16,13 +16,14 @@ export const dimensionsPlugin: EnginePlugin = {
   name: 'dimensions',
   setup(ctx) {
     const { camera, world, player, commands } = ctx;
+    if (!player) return;
 
     const dimensionManager = new DimensionManager();
     const warp = new PortalWarp();
     ctx.postProcessor.add(warp);
 
     dimensionManager.onChatMessage = (text) => chat(ctx, text);
-    dimensionManager.onWarpEffect = (dim) => warp.triggerExit(dim.portalColor ?? 0x9c27b0);
+    dimensionManager.onWarpEffect = (dim) => warp.triggerExit(dim.accentColor ?? 0x9c27b0);
 
     // Lente gravitacional na fenda mais próxima e a câmera sendo sugada para dentro dela
     const riftWorldPos = new Vector3();

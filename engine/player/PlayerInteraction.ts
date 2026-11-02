@@ -26,7 +26,7 @@ export default class PlayerInteraction {
     private readonly world: ProceduralWorld,
     public onBlockDestroyed?: (pos: Vector3, normal: Vector3, blockType?: number) => void,
     public onBlockPlaced?: (pos: Vector3, normal: Vector3, type: number) => void,
-    public onSelectionChange?: (type: number) => void
+    public onSelectionChange?: (type: number, slotIndex: number) => void
   ) {
     this.reach = 8 * world.voxelsPerBlock;
   }
@@ -38,29 +38,40 @@ export default class PlayerInteraction {
       this.currentSlotIndex = Math.max(0, this.hotbarTypes.length - 1);
     }
     if (this.hotbarTypes.length > 0) {
-      this.selectedBlockType = this.hotbarTypes[this.currentSlotIndex];
-      if (this.onSelectionChange) this.onSelectionChange(this.selectedBlockType);
+      const currentSlotType = this.hotbarTypes[this.currentSlotIndex];
+      // Só emite se o tipo do slot atual realmente diferir do selecionado
+      if (currentSlotType !== this.selectedBlockType) {
+        this.selectedBlockType = currentSlotType;
+        this.onSelectionChange?.(this.selectedBlockType, this.currentSlotIndex);
+      }
     }
   }
 
   public selectSlot(idx: number): void {
     if (idx < 0 || idx >= this.hotbarTypes.length) return;
+    const prevSlot = this.currentSlotIndex;
+    const prevType = this.selectedBlockType;
     this.currentSlotIndex = idx;
-    const newType = this.hotbarTypes[idx];
-    if (newType !== this.selectedBlockType) {
-      this.selectedBlockType = newType;
-      if (this.onSelectionChange) this.onSelectionChange(newType);
+    this.selectedBlockType = this.hotbarTypes[idx];
+    if (this.currentSlotIndex !== prevSlot || this.selectedBlockType !== prevType) {
+      this.onSelectionChange?.(this.selectedBlockType, idx);
     }
   }
 
+  public getSelectedBlockType(): number {
+    return this.selectedBlockType;
+  }
+
   public setSelectedBlockType(type: number): void {
+    const prevSlot = this.currentSlotIndex;
+    const prevType = this.selectedBlockType;
     const idx = this.hotbarTypes.indexOf(type);
     if (idx !== -1) {
       this.currentSlotIndex = idx;
     }
-    if (type !== this.selectedBlockType) {
-      this.selectedBlockType = type;
-      if (this.onSelectionChange) this.onSelectionChange(type);
+    this.selectedBlockType = type;
+    if (this.currentSlotIndex !== prevSlot || this.selectedBlockType !== prevType) {
+      this.onSelectionChange?.(type, this.currentSlotIndex);
     }
   }
 
@@ -77,17 +88,43 @@ export default class PlayerInteraction {
     }
   }
 
+  private activeMouseButton: number | null = null;
+  private continuousTimer = 0;
+  /** Intervalo em ms para disparo contínuo ao segurar o botão do mouse (~14 ações/seg). */
+  public continuousInterval = 70;
+
+  public onMouseDown(button: number): void {
+    this.activeMouseButton = button;
+    this.continuousTimer = 0;
+    this.triggerClick(button);
+  }
+
+  public onMouseUp(button: number): void {
+    if (this.activeMouseButton === button) {
+      this.activeMouseButton = null;
+    }
+  }
+
   public setLock(locked: boolean): void {
     this.isLocked = locked;
     if (!locked) {
+      this.activeMouseButton = null;
       this.world.clearBlockOutline();
       this.isBreaking = false;
     }
   }
 
-  /** Atualiza o contorno visual do bloco focado (executado a cada frame). */
-  public update(): void {
+  /** Atualiza o contorno visual do bloco focado e a ação contínua do mouse (executado a cada frame). */
+  public update(deltaMs: number = 16.6667): void {
     if (!this.isLocked) return;
+
+    if (this.activeMouseButton !== null) {
+      this.continuousTimer += deltaMs;
+      if (this.continuousTimer >= this.continuousInterval) {
+        this.continuousTimer = 0;
+        this.triggerClick(this.activeMouseButton);
+      }
+    }
 
     this.camera.getWorldDirection(this.lookDirection);
     this.rayOrigin.copy(this.camera.position);

@@ -16,6 +16,7 @@ export const effectsPlugin: EnginePlugin = {
   name: 'effects',
   setup(ctx) {
     const { scene, camera, world, player, commands } = ctx;
+    if (!player) return;
 
     const blackHoleManager = new BlackHoleManager(scene);
     blackHoleManager.onChatMessage = (text) => chat(ctx, text);

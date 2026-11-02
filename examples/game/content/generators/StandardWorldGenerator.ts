@@ -1,4 +1,5 @@
 import type { ChunkContext, WorldGenerator } from '@voxel/engine/chunk-worker';
+import { sampleHeight, classifyBiome, scatterOres, type BiomeRule, type OreRule } from '@voxel/engine/chunk-worker';
 import { BlockType } from '../blocks';
 import { CaveCarver } from './caves';
 import {
@@ -9,6 +10,35 @@ import {
   type OverworldBiome,
   type VolcanoInfo,
 } from './overworldShape';
+
+const HEIGHTMAP_OPTIONS = { height: GLOBAL_HEIGHT };
+
+/**
+ * A cascata de 10 biomas de `getBiomeAt`, como regras de `classifyBiome` — mesma ordem,
+ * mesmos limiares; a primeira que bater vence, igual ao if/else que substituiu.
+ * `vulcanic` continua sendo decidido antes de chamar `classifyBiome` (ver `generate()`),
+ * porque depende de `isVolcanic` pré-calculado na passagem 1, não de clima.
+ */
+const BIOME_RULES: BiomeRule[] = [
+  { id: 'mountains', test: (c) => c.elevation >= 72 },
+  { id: 'taiga', test: (c) => c.temp < -0.38 && c.moisture > 0.08 },
+  { id: 'snow_tundra', test: (c) => c.temp < -0.38 },
+  { id: 'taiga', test: (c) => c.temp < -0.10 && c.moisture > -0.05 },
+  { id: 'plains', test: (c) => c.temp < -0.10 },
+  { id: 'desert', test: (c) => c.temp > 0.35 && c.moisture < -0.12 },
+  { id: 'jungle', test: (c) => c.temp > 0.28 && c.moisture > 0.22 },
+  { id: 'cherry', test: (c) => c.moisture > 0.32 && c.temp > 0.06 && c.elevation > SEA_LEVEL + 7 },
+  { id: 'forest', test: (c) => c.moisture > 0.32 },
+  { id: 'birch', test: (c, ctx, x, z) => c.moisture > 0.06 && ctx.simplex.noise((x + 3333) / 320, (z + 7777) / 320) > 0.12 },
+  { id: 'forest', test: (c) => c.moisture > 0.06 },
+  { id: 'plains', test: () => true }
+];
+
+/** O mesmo scatter de minério de antes (carvão/ferro, por um único campo de ruído 3D). */
+const ORES: OreRule[] = [
+  { blockId: BlockType.Coal, threshold: 0.82 },
+  { blockId: BlockType.Iron, threshold: -0.86 }
+];
 
 export { getVolcanoInCell, type OverworldBiome, type VolcanoInfo };
 
@@ -107,7 +137,7 @@ export class StandardWorldGenerator implements WorldGenerator {
       const lx = x - ctx.startX;
       for (let z = ctx.startZ; z < ctx.endZ; z++) {
         const lz = z - ctx.startZ;
-        let sy = surfaceHeightAt(ctx, x, z);
+        let sy = sampleHeight(ctx, x, z, HEIGHTMAP_OPTIONS);
 
         // Evaluate nearby volcanoes
         let bestConeElev = 0;
@@ -193,7 +223,13 @@ export class StandardWorldGenerator implements WorldGenerator {
         if (ctx.startY > sy && ctx.startY > seaLevel) continue;
 
         const localMaxY = Math.min(ctx.endY - 1, Math.max(sy, seaLevel) + 2);
-        const { biome } = getBiomeAt(x, z, sy, seaLevel, globalHeight, isVolcanic, ctx.simplex);
+        const biome: OverworldBiome = isVolcanic
+          ? 'volcanic'
+          : (classifyBiome(ctx, x, z, sy, {
+              rules: BIOME_RULES,
+              temperature: { offset: [15000, 15000], scale: 950, detailScale: 460, detailWeight: 0.2 },
+              moisture: { offset: [-25000, 35000], scale: 1050, detailScale: 520, detailWeight: 0.2 }
+            }).id as OverworldBiome);
 
         for (let y = ctx.startY; y <= localMaxY; y++) {
           const isTerrain = y <= sy;
@@ -280,9 +316,8 @@ export class StandardWorldGenerator implements WorldGenerator {
               }
 
               // Ores in deep stone
-              const oreRand = ctx.simplex.noise3d(x / 3.5, y / 3.5, z / 3.5);
-              if (oreRand > 0.82) type = BlockType.Coal;
-              else if (oreRand < -0.86) type = BlockType.Iron;
+              const ore = scatterOres(ctx, x, y, z, ORES);
+              if (ore !== null) type = ore;
             }
 
             ctx.setBlock(x, y, z, type);

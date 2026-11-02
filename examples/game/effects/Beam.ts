@@ -223,7 +223,8 @@ export class Beam extends Group {
         color: 0xffffff,
         transparent: true,
         blending: AdditiveBlending,
-        opacity: 0.95
+        opacity: 0.95,
+        depthWrite: false
       });
       this.coreMesh = new Mesh(coreGeo, coreMat);
       this.coreMesh.position.copy(midPoint);
@@ -243,7 +244,8 @@ export class Beam extends Group {
         blending: AdditiveBlending,
         transparent: true,
         opacity: 0.95,
-        linewidth: 2
+        linewidth: 2,
+        depthWrite: false
       });
       this.lightningLines = new LineSegments(lineGeo, lineMat);
       this.add(this.lightningLines);
@@ -255,7 +257,8 @@ export class Beam extends Group {
         side: DoubleSide,
         transparent: true,
         blending: AdditiveBlending,
-        opacity: 0.9
+        opacity: 0.9,
+        depthWrite: false
       });
       this.impactRing = new Mesh(ringGeo, ringMat);
       this.impactRing.position.copy(this.target);
@@ -272,7 +275,8 @@ export class Beam extends Group {
         color: 0xffffff,
         transparent: true,
         blending: AdditiveBlending,
-        opacity: 0.95
+        opacity: 0.95,
+        depthWrite: false
       });
       this.coreMesh = new Mesh(coreGeo, coreMat);
       this.coreMesh.position.copy(midPoint);
@@ -286,7 +290,8 @@ export class Beam extends Group {
         side: DoubleSide,
         transparent: true,
         blending: AdditiveBlending,
-        opacity: 0.75
+        opacity: 0.75,
+        depthWrite: false
       });
       this.glowMesh = new Mesh(glowGeo, glowMat);
       this.glowMesh.position.copy(midPoint);
@@ -300,7 +305,8 @@ export class Beam extends Group {
         side: DoubleSide,
         transparent: true,
         blending: AdditiveBlending,
-        opacity: 0.9
+        opacity: 0.9,
+        depthWrite: false
       });
       this.impactRing = new Mesh(ringGeo, ringMat);
       this.impactRing.position.copy(this.target);

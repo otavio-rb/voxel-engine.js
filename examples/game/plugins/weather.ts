@@ -7,6 +7,7 @@ export const weatherPlugin: EnginePlugin = {
   name: 'weather',
   setup(ctx) {
     const { scene, camera, world, player, commands } = ctx;
+    if (!player) return;
 
     const weatherManager = new WeatherManager(ctx, scene, camera, world, player);
 

@@ -10,4 +10,19 @@ export {
   type BlockPlaceEvent
 } from './core/VoxelEngine';
 export { EventEmitter, type EventCallback } from './core/EventEmitter';
-export { blockRegistry, BlockRegistry, type BlockConfig } from './blocks/BlockRegistry';
+export {
+  createOrbitCameraRig,
+  type OrbitCameraRig,
+  type OrbitCameraRigOptions
+} from './camera/OrbitCameraRig';
+export {
+  blockRegistry,
+  BlockRegistry,
+  SURFACE_TYPE_ID,
+  type BlockConfig,
+  type BlockSurfaceType,
+  type FluidBlockConfig,
+  type FluidReactionRule,
+  type MicrovoxelBuilderContext,
+  type MicrovoxelMeshBuilder
+} from './blocks/BlockRegistry';

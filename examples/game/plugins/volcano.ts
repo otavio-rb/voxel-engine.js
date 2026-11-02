@@ -7,6 +7,7 @@ export const volcanoPlugin: EnginePlugin = {
   name: 'volcano',
   setup(ctx) {
     const { player } = ctx;
+    if (!player) return;
 
     ctx.commands.register(['/volcano', '/vulcao'], () => {
       const cellX = Math.floor(player.camera.position.x / 192);

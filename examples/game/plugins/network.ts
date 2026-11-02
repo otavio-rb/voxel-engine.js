@@ -6,6 +6,7 @@ import { WORLD_REGENERATED, type WorldRegeneratedEvent } from './dimensions';
 export const networkPlugin: EnginePlugin = {
   name: 'network',
   setup(ctx) {
+    if (!ctx.player) return;
     const networkClient = new NetworkClient(ctx.world, ctx.player);
     networkClient.onWorldInit = (config) => ctx.emitToMain('world_init', config);
     networkClient.onWorldRegen = (config) => ctx.emitToMain('world_regen', config);

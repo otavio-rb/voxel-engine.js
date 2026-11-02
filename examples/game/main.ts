@@ -1,4 +1,4 @@
-import Stats from 'three/examples/jsm/libs/stats.module.js';
+import EngineWorker from './workers/engine.worker.ts?worker';
 import { VoxelEngine, EngineStats, BlockBreakEvent, BlockPlaceEvent } from '@voxel/engine';
 import UI, { UIStats } from './ui/UI';
 import MobileControls from './ui/MobileControls';
@@ -21,7 +21,6 @@ class Game {
   private readonly engine: VoxelEngine;
   private readonly ui: UI;
   private readonly mobileControls: MobileControls;
-  private readonly stats: Stats;
 
   private isMenuOpen = true;
   private selectedWorldType: WorldType = WorldType.Standard;
@@ -31,14 +30,11 @@ class Game {
   constructor() {
     registerBlocks();
     this.ui = new UI();
-    this.stats = new Stats();
-    this.stats.dom.id = 'stats-overlay';
-    document.body.appendChild(this.stats.dom);
 
     const canvas = document.querySelector<HTMLCanvasElement>('#scene')!;
     this.engine = new VoxelEngine({
       canvas,
-      worker: new Worker(new URL('./workers/engine.worker.ts', import.meta.url), { type: 'module' })
+      worker: new EngineWorker()
     });
     this.engine.setInputBlocked(true);
 
@@ -102,7 +98,7 @@ class Game {
 
     this.engine.start({
       worldType: this.selectedWorldType,
-      mode: this.selectedMode === 'debug' ? 'creative' : 'survival',
+      flight: this.selectedMode === 'debug',
       shaders: this.shadersEnabled
     });
 
@@ -117,8 +113,7 @@ class Game {
 
   private bindEngineEvents(): void {
     this.engine.on<EngineStats>('stats', (stats) => {
-      this.stats.update();
-      this.ui.update(stats as unknown as UIStats);
+      this.ui.update(stats);
 
       const overlay = document.getElementById('underwater-overlay');
       if (overlay) {
@@ -701,6 +696,14 @@ class Game {
         return;
       }
 
+      if (e.key === 'F3') {
+        e.preventDefault();
+        const visible = this.ui.toggleDebugOverlay();
+        const debugText = document.getElementById('debug-text');
+        if (debugText) debugText.innerText = visible ? 'Ativado' : 'Desativado';
+        return;
+      }
+
       if (e.key.toLowerCase() === ';') {
         if (this.isMenuOpen || this.ui.isInventoryOpen) return;
         e.preventDefault();
@@ -789,7 +792,7 @@ class Game {
         }
 
         if (this.engine.hasStarted()) {
-          this.engine.setGameMode(this.selectedMode === 'debug' ? 'creative' : 'survival');
+          this.engine.setFlightMode(this.selectedMode === 'debug');
         }
       });
     }
@@ -802,6 +805,15 @@ class Game {
         if (this.engine.hasStarted()) {
           this.engine.toggleShaders(this.shadersEnabled);
         }
+      });
+    }
+
+    const debugBtn = document.getElementById('debug-toggle');
+    const debugText = document.getElementById('debug-text');
+    if (debugBtn && debugText) {
+      debugBtn.addEventListener('click', () => {
+        const visible = this.ui.toggleDebugOverlay();
+        debugText.innerText = visible ? 'Ativado' : 'Desativado';
       });
     }
 

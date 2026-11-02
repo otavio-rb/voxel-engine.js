@@ -17,7 +17,8 @@ const vec4s = () => Array.from({ length: MAX_FX }, () => new Vector4());
 export class ScreenEffects implements ScreenPass {
   public enabled = false;
   public readonly material: ShaderMaterial;
-  public readonly order = 0;
+  /** Roda apos bloom e volumetria (distorce a cena inteira) e antes do tonemap */
+  public readonly order = 80;
 
   private camera: PerspectiveCamera | null = null;
   private lensCount = 0;

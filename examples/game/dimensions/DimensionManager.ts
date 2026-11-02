@@ -58,12 +58,12 @@ export class DimensionManager {
     targetDimId: string = 'nether'
   ): DimensionalRift {
     const targetDim = dimensionRegistry.get(targetDimId);
-    const portalColor = targetDim?.portalColor ?? 0x9c27b0;
+    const accentColor = targetDim?.accentColor ?? 0x9c27b0;
 
     const rift = new DimensionalRift({
       position: pos.clone(),
       targetDimId,
-      portalColor
+      accentColor
     });
 
     world.add(rift);
@@ -255,7 +255,7 @@ export class DimensionManager {
     const span = this.portalInfluenceRadius - this.portalCoreRadius;
     const closeness = Math.min(1, Math.max(0, (this.portalInfluenceRadius - minRiftDist) / span));
     this.approach = closeness;
-    this.approachColor = dimensionRegistry.get(nearestRift.targetDimId)?.portalColor ?? 0x9c27b0;
+    this.approachColor = dimensionRegistry.get(nearestRift.targetDimId)?.accentColor ?? 0x9c27b0;
     nearestRift.suctionIntensity = closeness;
 
     // Puxão suave, só perto da fenda: o jogador ainda consegue se afastar

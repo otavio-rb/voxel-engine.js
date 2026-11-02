@@ -27,6 +27,10 @@ export interface DimensionAtmosphere {
   hasSkyLight?: boolean;
   /** Minimum terrain brightness (0-1) in total darkness. Default 0.03. */
   minLight?: number;
+  /** Cor da luz direta do sol com ele a pino. Default `0xfff0cf` (branco quente). */
+  sunColor?: number;
+  /** Cor da luz direta com o sol no horizonte. Default `0xffa64a` (ambar). */
+  sunHorizonColor?: number;
 }
 
 export interface DimensionPhysics {
@@ -59,8 +63,10 @@ export interface DimensionDefinition {
   readonly coordinateScale?: number;
   /** Default spawn height offset */
   readonly defaultSpawnY?: number;
-  /** Custom portal signature color (for portal blocks and warp FX) */
-  readonly portalColor: number;
+  /** Explicit default spawn point and orientation for this dimension */
+  readonly spawnPoint?: { x: number; y: number; z: number; yaw?: number; pitch?: number };
+  /** Optional identity color for this dimension (map markers, UI, transition effects, portal FX, etc.) */
+  readonly accentColor?: number;
   /** Environmental physics (gravity, friction, jump) */
   readonly physics: DimensionPhysics;
   /** Atmospheric lighting, sky dome, fog, and celestial appearance */
@@ -85,7 +91,7 @@ export const DEFAULT_DIMENSION: DimensionDefinition = {
   id: 'default',
   name: 'Default',
   generatorId: 'default',
-  portalColor: 0x4488ff,
+  accentColor: 0x4488ff,
   physics: {
     gravity: 0.008,
     friction: 0.9,

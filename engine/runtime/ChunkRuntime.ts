@@ -70,6 +70,7 @@ function handleJob(job: ChunkJobData): void {
         endZ:        job.endZ,
         worldParams: job.worldParams,
         voxelsPerBlock: job.voxelsPerBlock,
+        stride:      job.stride,
         simplex,       // ← injected, no re-creation inside ChunkData
       }).getData();
 
@@ -147,7 +148,7 @@ function handleJob(job: ChunkJobData): void {
 }
 
 /** Valor unico de um volume, ou null se houver mais de um. */
-function uniformValue(arr: Int8Array | Uint8Array): number | null {
+function uniformValue(arr: Int16Array | Uint8Array): number | null {
   const first = arr[0];
   for (let i = 1; i < arr.length; i++) {
     if (arr[i] !== first) return null;
@@ -182,7 +183,8 @@ function buildGeometry(data: ChunkDataResult, job: ChunkJobData) {
   const step = job.lodStep ?? 1;
   if (step <= 1) {
     return new ChunkGeometry(
-      data, job.neighbourBorderBlocks, job.light, job.neighbourBorderLight, job.neighbourBorderWaterLevels
+      data, job.neighbourBorderBlocks, job.light, job.neighbourBorderLight, job.neighbourBorderWaterLevels,
+      job.greedyMeshing
     ).getData();
   }
   return buildLodGeometry(data, job, step);
@@ -190,11 +192,11 @@ function buildGeometry(data: ChunkDataResult, job: ChunkJobData) {
 
 /**
  * Contadores de dominancia, reaproveitados entre todas as celulas de todos os chunks.
- * Ids de bloco cabem em 0..127 (Int8Array), e `touched` guarda quais entradas limpar,
+ * Ids de bloco cabem em 0..127 (Int16Array), e `touched` guarda quais entradas limpar,
  * para nao zerar 128 posicoes por macro-celula.
  */
-const DOM_COUNTS = new Int32Array(128);
-const DOM_TOUCHED = new Int32Array(128);
+const DOM_COUNTS = new Int32Array(1024);
+const DOM_TOUCHED = new Int32Array(1024);
 let domTouched = 0;
 
 function domReset(): void {
@@ -225,9 +227,9 @@ function domWinner(): number {
 }
 
 /** Reamostra um volume size^3 em macro-celulas de `step` voxels. */
-function downsampleVolume(src: Int8Array, size: number, step: number): Int8Array {
+function downsampleVolume(src: Int16Array, size: number, step: number): Int16Array {
   const m = size / step;
-  const out = new Int8Array(m * m * m);
+  const out = new Int16Array(m * m * m);
   const area = size * size;
   for (let my = 0; my < m; my++) {
     for (let mz = 0; mz < m; mz++) {
@@ -247,10 +249,10 @@ function downsampleVolume(src: Int8Array, size: number, step: number): Int8Array
 }
 
 /** Reamostra uma fatia de fronteira size^2 em macro-celulas de `step`. */
-function downsampleSlice(src: Int8Array | undefined, size: number, step: number): Int8Array | undefined {
+function downsampleSlice(src: Int16Array | undefined, size: number, step: number): Int16Array | undefined {
   if (!src) return undefined;
   const m = size / step;
-  const out = new Int8Array(m * m);
+  const out = new Int16Array(m * m);
   for (let a = 0; a < m; a++) {
     for (let b = 0; b < m; b++) {
       const oa = a * step, ob = b * step;
@@ -328,7 +330,8 @@ function buildLodGeometry(data: ChunkDataResult, job: ChunkJobData, step: number
     downsampleBorders(job.neighbourBorderBlocks, size, step),
     downsampleScalar(job.light, size, step),
     downsampleLightBorders(job.neighbourBorderLight ?? {}, size, step),
-    downsampleLightBorders(job.neighbourBorderWaterLevels ?? {}, size, step)
+    downsampleLightBorders(job.neighbourBorderWaterLevels ?? {}, size, step),
+    job.greedyMeshing
   ).getData();
 
   for (const part of [geometry.opaque, geometry.water]) {
@@ -339,12 +342,12 @@ function buildLodGeometry(data: ChunkDataResult, job: ChunkJobData, step: number
 }
 
 function computeBorders(data: ChunkDataResult, size: number): ChunkBorders {
-    const negX = new Int8Array(size * size).fill(-1);
-    const posX = new Int8Array(size * size).fill(-1);
-    const negY = new Int8Array(size * size).fill(-1);
-    const posY = new Int8Array(size * size).fill(-1);
-    const negZ = new Int8Array(size * size).fill(-1);
-    const posZ = new Int8Array(size * size).fill(-1);
+    const negX = new Int16Array(size * size).fill(-1);
+    const posX = new Int16Array(size * size).fill(-1);
+    const negY = new Int16Array(size * size).fill(-1);
+    const posY = new Int16Array(size * size).fill(-1);
+    const negZ = new Int16Array(size * size).fill(-1);
+    const posZ = new Int16Array(size * size).fill(-1);
 
     for (let y = 0; y < size; y++) {
         for (let l = 0; l < size; l++) {

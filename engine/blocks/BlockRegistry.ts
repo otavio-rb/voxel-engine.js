@@ -4,8 +4,62 @@ export const AIR = -1;
 /** Minecraft's slipperiness for ordinary blocks. */
 export const DEFAULT_SLIPPERINESS = 0.6;
 
+export interface MicrovoxelBuilderContext {
+  wx: number;
+  wy: number;
+  wz: number;
+  skyLight: number;
+  blkLight: number;
+  emissive: number;
+  getNeighbourBlock: (nx: number, ny: number, nz: number) => number;
+  addBox: (
+    x0: number, y0: number, z0: number,
+    x1: number, y1: number, z1: number,
+    r: number, g: number, b: number,
+    boxEmissive?: number
+  ) => void;
+}
+
+export type MicrovoxelMeshBuilder = (ctx: MicrovoxelBuilderContext) => void;
+
+export interface FluidReactionRule {
+  /** Block ID placed at the reaction site (or self cell). */
+  resultBlockId?: number;
+  /** Block ID placed at the other fluid's position (default: AIR). */
+  otherResultBlockId?: number;
+  /** Alias for the block ID this fluid cell becomes on contact. */
+  selfBecomes?: number;
+  /** Alias for the block ID the neighbor fluid cell becomes on contact. */
+  neighborBecomes?: number;
+  /** Particle color emitted on reaction (default: 0xEEF2F7). */
+  particleColor?: number;
+}
+
+export interface FluidBlockConfig {
+  /** Viscosity in simulation ticks (1 = flows every tick like water, 3 = flows every 3rd tick like lava). */
+  viscosity?: number;
+  /** True if this block acts as a continuous fluid source/spring. */
+  isSpring?: boolean;
+  /** For springs: the fluid block ID emitted into adjacent passable cells. */
+  emitsFluidId?: number;
+  /** Chemical reactions when touching another block ID (e.g. water touching lava -> basalt). */
+  reactions?: Record<number, FluidReactionRule>;
+}
+
+export type BlockSurfaceType = 'default' | 'stone' | 'foliage' | 'magma' | 'water' | 'lava';
+
+/** Numeric material IDs passed via vertex UV.y to shaders so shaders don't guess material from RGB. */
+export const SURFACE_TYPE_ID: Record<BlockSurfaceType, number> = {
+  default: 0,
+  stone: 1,
+  foliage: 2,
+  magma: 3,
+  water: 4,
+  lava: 5
+};
+
 export interface BlockConfig {
-  /** Must fit in an Int8Array (0..127); negative IDs are reserved for air. */
+  /** Must fit in an Int16Array (0..1023); negative IDs are reserved for air. */
   id: number;
   name: string;
   color: number;
@@ -29,12 +83,20 @@ export interface BlockConfig {
   air?: boolean;
   /** 'cube' for standard 6-sided voxel blocks, or 'microvoxel'/'cross' for 3D micro-voxel models (plants, vines, mushrooms). */
   meshType?: 'cube' | 'microvoxel' | 'cross';
+  /** Custom 3D micro-box geometry builder for 'microvoxel' / 'cross' blocks. */
+  meshBuilder?: MicrovoxelMeshBuilder;
+  /** Cellular automata fluid simulation rules (viscosity, springs, reactions). */
+  fluidConfig?: FluidBlockConfig;
+  /** Surface shader material hint ('default', 'stone', 'foliage', 'magma', 'water', 'lava'). */
+  surfaceType?: BlockSurfaceType;
+  /** Explicit surface roughness (0.03 to 1.0) for GGX specular lighting. */
+  roughness?: number;
 }
 
-/** Ids de bloco cabem em 0..127 porque o volume e Int8Array; 256 da folga sem custo. */
-const BLOCK_TABLE_SIZE = 256;
+/** Capacidade da tabela indexada de propriedades de blocos (0..1023 cabem em Int16Array). */
+const BLOCK_TABLE_SIZE = 1024;
 
-// Nove flags, por isso Uint16Array e nao Uint8Array: com oito bits o ultimo nao cabia.
+// Dez flags, por isso Uint16Array e nao Uint8Array.
 const F_REGISTERED  = 1 << 0;
 const F_SOLID       = 1 << 1;
 const F_OPAQUE      = 1 << 2;
@@ -44,6 +106,7 @@ const F_TRANSPARENT = 1 << 5;
 const F_SWIMMABLE   = 1 << 6;
 const F_MICROVOXEL  = 1 << 7;
 const F_FLOWS       = 1 << 8;
+const F_SPRING      = 1 << 9;
 
 export class BlockRegistry {
   private static instance: BlockRegistry | null = null;
@@ -77,9 +140,13 @@ export class BlockRegistry {
   // padrao viraria 0.6000000238418579, mudando a fisica nos ultimos bits sem motivo.
   private readonly slipperinessTable = new Float64Array(BLOCK_TABLE_SIZE);
   private readonly colorTable = new Uint32Array(BLOCK_TABLE_SIZE);
+  private readonly surfaceTypeTable = new Uint8Array(BLOCK_TABLE_SIZE);
+  private readonly viscosityTable = new Uint8Array(BLOCK_TABLE_SIZE);
+  private readonly springEmitsTable = new Int16Array(BLOCK_TABLE_SIZE).fill(-1);
+  private readonly meshBuilderTable: Array<MicrovoxelMeshBuilder | undefined> = new Array(BLOCK_TABLE_SIZE);
 
   public register(config: BlockConfig): void {
-    const isSpecial = config.meshType === 'microvoxel' || config.meshType === 'cross';
+    const isSpecial = config.meshType === 'microvoxel' || config.meshType === 'cross' || !!config.meshBuilder;
     const fullConfig: BlockConfig = {
       solid: isSpecial ? false : true,
       opaque: isSpecial ? false : true,
@@ -89,7 +156,7 @@ export class BlockRegistry {
       transparent: isSpecial ? true : false,
       air: false,
       luminance: 0,
-      meshType: 'cube',
+      meshType: config.meshBuilder ? 'microvoxel' : 'cube',
       ...config
     };
 
@@ -110,7 +177,7 @@ export class BlockRegistry {
     const id = b.id;
     if (id < 0 || id >= BLOCK_TABLE_SIZE) return;
 
-    const special = b.meshType === 'microvoxel' || b.meshType === 'cross';
+    const special = b.meshType === 'microvoxel' || b.meshType === 'cross' || !!b.meshBuilder;
     let f = F_REGISTERED;
     if (b.solid ?? true) f |= F_SOLID;
     if (b.opaque ?? true) f |= F_OPAQUE;
@@ -120,6 +187,7 @@ export class BlockRegistry {
     if (b.swimmable ?? false) f |= F_SWIMMABLE;
     if (b.flows ?? false) f |= F_FLOWS;
     if (special) f |= F_MICROVOXEL;
+    if (b.fluidConfig?.isSpring) f |= F_SPRING;
     this.flags[id] = f;
 
     this.lightOpacityTable[id] =
@@ -128,9 +196,18 @@ export class BlockRegistry {
       : b.opaque ? 15
       : b.fluid ? 2
       : 1;
-    this.lightEmissionTable[id] = Math.max(0, Math.min(15, Math.round((b.luminance ?? 0) * 15)));
+    // Suporta tanto luminance em [0..1] quanto em [0..15] (como usado em tiny-voxels)
+    const rawLum = b.luminance ?? 0;
+    const normLum = rawLum > 1.0 ? rawLum : Math.round(rawLum * 15);
+    this.lightEmissionTable[id] = Math.max(0, Math.min(15, Math.round(normLum)));
     this.slipperinessTable[id] = b.slipperiness ?? DEFAULT_SLIPPERINESS;
     this.colorTable[id] = b.color;
+
+    const surf = b.surfaceType ?? (b.fluid ? (b.swimmable ? 'water' : 'lava') : 'default');
+    this.surfaceTypeTable[id] = SURFACE_TYPE_ID[surf] ?? 0;
+    this.viscosityTable[id] = Math.max(1, b.fluidConfig?.viscosity ?? (b.fluid && !b.swimmable ? 3 : 1));
+    this.springEmitsTable[id] = b.fluidConfig?.emitsFluidId ?? -1;
+    this.meshBuilderTable[id] = b.meshBuilder;
   }
 
   /** True quando o id tem entrada nas tabelas indexadas. */
@@ -160,6 +237,35 @@ export class BlockRegistry {
   public isFluid(id: number): boolean {
     if (id < 0) return false;
     return (this.flags[id] & (F_REGISTERED | F_FLUID)) === (F_REGISTERED | F_FLUID);
+  }
+
+  public isSpring(id: number): boolean {
+    if (id < 0) return false;
+    return (this.flags[id] & (F_REGISTERED | F_SPRING)) === (F_REGISTERED | F_SPRING);
+  }
+
+  public getSpringEmittedFluidId(id: number): number {
+    if (!this.cached(id)) return -1;
+    return this.springEmitsTable[id];
+  }
+
+  public getFluidViscosity(id: number): number {
+    if (!this.cached(id)) return 1;
+    return this.viscosityTable[id] || 1;
+  }
+
+  public getFluidReactions(id: number): Record<number, FluidReactionRule> | undefined {
+    return this.blocks.get(id)?.fluidConfig?.reactions;
+  }
+
+  public getSurfaceTypeId(id: number): number {
+    if (!this.cached(id)) return 0;
+    return this.surfaceTypeTable[id];
+  }
+
+  public getMeshBuilder(id: number): MicrovoxelMeshBuilder | undefined {
+    if (!this.cached(id)) return undefined;
+    return this.meshBuilderTable[id];
   }
 
   /** Light lost when entering the block (0-15); see `BlockConfig.lightOpacity`. */

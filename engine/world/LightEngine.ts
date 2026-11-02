@@ -9,7 +9,7 @@ export const MAX_LIGHT = 15;
 
 /** Chunk as seen by the light engine. Light is packed per cell: sky in the high nibble, block in the low. */
 export interface LightChunk {
-  data: { blocks: Int8Array };
+  data: { blocks: Int16Array };
   light: Uint8Array;
   neighbors: Array<LightChunk | null>;
   /** Top was lit as open sky because nothing was loaded above. */
@@ -90,14 +90,14 @@ export class LightEngine {
    * e para eles a luz e constante. Inundar 32 mil celulas vazias para descobrir isso custava
    * ~2.5 ms por chunk; a varredura custa ~0.02 ms.
    */
-  private isAllAir(blocks: Int8Array): boolean {
+  private isAllAir(blocks: Int16Array): boolean {
     for (let i = 0; i < blocks.length; i++) {
       if (blocks[i] !== -1) return false;
     }
     return true;
   }
 
-  public computeLocal(blocks: Int8Array, openSkyAbove: boolean): Uint8Array {
+  public computeLocal(blocks: Int16Array, openSkyAbove: boolean): Uint8Array {
     // Ar puro: sem opacidade e sem emissao em celula nenhuma, logo o resultado e o valor do
     // ceu em tudo (ou zero, se nao ha ceu aberto acima). Nao ha o que inundar.
     if (this.isAllAir(blocks)) {
@@ -462,7 +462,7 @@ export class LightEngine {
   }
 
   /** True if sunlight crosses the whole column without being filtered. */
-  private isClearColumn(blocks: Int8Array, column: number): boolean {
+  private isClearColumn(blocks: Int16Array, column: number): boolean {
     for (let i = column; i < blocks.length; i += this.area) {
       if (this.opacity[blocks[i] & 0xff] !== 0) return false;
     }
@@ -470,7 +470,7 @@ export class LightEngine {
   }
 
   /** True if a horizontal neighbor inside the chunk could receive light from this sky cell. */
-  private hasDimmerSideNeighbor(blocks: Int8Array, light: Uint8Array, index: number, x: number, z: number): boolean {
+  private hasDimmerSideNeighbor(blocks: Int16Array, light: Uint8Array, index: number, x: number, z: number): boolean {
     const S = this.size;
     if (x === 0 || x === S - 1 || z === 0 || z === S - 1) return true;
     const op = this.opacity;
