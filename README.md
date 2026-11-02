@@ -1,192 +1,339 @@
-# voxel-engine.js
+# @voxel/engine (voxel-engine.js)
 
-Motor voxel no navegador desenvolvido com **Three.js** e **TypeScript**, focado em geração procedural de terreno, otimização de malha em tempo real com **Greedy Meshing**, iluminação voxel 3D e processamento concorrente em **Web Workers**.
+[🇧🇷 Português](README.md) · [🇺🇸 English](README.en.md) · [Documentação Web / Web Docs](docs/index.html)
 
-**Demo online:** https://voxel-engine-js.vercel.app/
+Motor voxel 3D de alta performance para navegadores web desenvolvido em **TypeScript** e **Three.js**, estruturado sobre uma arquitetura estrita de concorrência com **Web Workers** e desacoplamento total entre o núcleo da engine e a camada de aplicação.
 
----
+O motor oferece dois paradigmas de renderização intercambiáveis (**Polygonal Greedy Meshing** e **GPU Volumetric Raymarching via DDA 3D**), simulação de fluidos por **Autômato Celular 3D**, propagação volumétrica de luz por flood fill e física cinemática de alta precisão.
 
-## Funcionalidades
-
-- **Terreno Procedural**: Geração contínua com ruídos volumétricos Perlin e Simplex 3D (relevo, biomas, árvores e redes de cavernas estilo *spaghetti*).
-- **Otimização de Malha (Greedy Meshing)**: Redução drástica da contagem de polígonos e vértices mesclando faces coplanares adjacentes com o mesmo material e descartando faces internas oclusas.
-- **Processamento Concorrente em Segundo Plano**: Geração matemática de relevo e malhagem de chunks descarregadas em Web Workers dedicados para manter 60+ FPS estáveis na thread principal.
-- **Iluminação Voxel Estilo Minecraft**: Propagação tridimensional de luz do sol (*Sky Light*) e luz emitida por blocos (*Block Light*) em níveis de 0 a 15 via *flood fill*, com interpolação suave de iluminação por vértice (*Smooth Lighting*) e *Ambient Occlusion* (AO).
-- **Física e Movimento Fiel ao Minecraft 1.8**: Loop de física fixo a 20 ticks/s com interpolação suave da câmera, conservação de momentum, atrito por bloco (*slipperiness*), sprint-jump, trava de segurança em bordas ao agachar (*sneak*) e arrasto em água e lava.
-- **Interação com o Mundo**: Inserção e destruição de blocos em tempo real com raycasting rápido em AABB voxel, disparando atualizações locais e incrementais de malha e luz.
-- **Múltiplas Dimensões**: Suporte modular a diferentes dimensões (`overworld`, `nether`, `lunar`, `volcanic`, `cavern`, etc.), cada uma com gerador de terreno, atmosfera e gravidade próprios.
-- **Ambiente Dinâmico e Efeitos**: Ciclo dia/noite em shaders customizados, atmosfera com névoa adaptativa, partículas e camada extensível de pós-processamento de tela.
+**Demo online:** https://voxel-engine-js.vercel.app/  
+**Documentação Técnica da Engine:** [Acessar /docs/](docs/index.html) ou navegue para `http://localhost:5173/docs/` no dev server.
 
 ---
 
-## Arquitetura: Engine × Jogo
+## Destaques da Engine
 
-O repositório adota uma separação estrita em duas camadas. O núcleo do motor (`engine/`) é totalmente desacoplado e reutilizável, nunca importando código específico do jogo (`game/`). O script `npm run check:boundary` é executado no pipeline para validar essa fronteira.
+- **Renderização Multi-Paradigma**:
+  - **Greedy Meshing Adaptativo**: Mesclagem de faces coplanares e descarte de oclusão interna em fatias 2D com *Smooth Lighting* e *Ambient Occlusion* (AO) por vértice, reduzindo em mais de 80% a geometria enviada à GPU.
+  - **GPU Volumetric Raymarching (DDA em Textura 3D)**: Renderização direta de dados volumétricos em fragment shader sem geração de malha poligonal, com aceleração espacial hierárquica (*Two-Level DDA / BrickMap*), ideal para minivoxels e destruição sub-bloco contínua.
+- **Concorrência Assíncrona Multi-Threaded (Zero Frame-Drops)**:
+  - Separação estrita em três threads: **Main Thread** (DOM, input e viewport), **Engine Worker** (física, entidades, ciclo de vida e grafo Three.js) e **Chunk Worker** (geração procedural de ruídos 3D e síntese de malhas).
+  - Transferência de dados pesados de geometria e volumetria sem custo de cópia de memória via `Transferable Objects` (`ArrayBuffer`).
+- **Simulador de Fluidos por Autômato Celular 3D (`FluidCellularAutomata`)**:
+  - Simulação física em reticulado tridimensional discreto: gravidade terminal, escorrimento em encostas/degraus e espalhamento lateral por pressão hidrostática de coluna.
+  - Reações termoquímicas em tempo real (ex.: contato água + lava solidificando em basalto com partículas de vapor).
+  - Otimização com estado de repouso (*Sleeping Cells*): corpos d'água planos (lagos, aquíferos e oceanos) entram em repouso absoluto, consumindo 0 ciclos de CPU até serem perturbados.
+  - Suporte a nascentes contínuas (`WaterSpring`) para alimentação perpétua de cachoeiras dinâmicas.
+- **Iluminação Volumétrica 3D (Dual-Channel Flood Fill)**:
+  - Canais independentes de **Sky Light** (luz solar atenuada verticalmente) e **Block Light** (fontes de luz emitidas) em níveis de 0 a 15.
+  - Propagação tridimensional em fila BFS com costura assíncrona entre bordas de chunks contíguos.
+  - Atualização incremental pontual: ao quebrar ou inserir blocos emissores/opacos, apenas os nós afetados são recalculados.
+- **Física Cinemática de Precisão (Minecraft 1.8 Faithful)**:
+  - Loop físico discreto a 20 ticks/s desacoplado da taxa de quadros de renderização (câmera com interpolação suave a 60/144+ Hz).
+  - Colisão contínua com resolução AABB por eixo, atrito configurável por bloco (*slipperiness*), sprint-jump contínuo e trava anti-queda em quinas ao agachar (*sneak lock*).
+- **Escala de Resolução Paramétrica (`voxelsPerBlock`)**:
+  - Resolução ajustável por mundo: de blocos volumosos tradicionais (1 voxel/bloco) até minivoxels de altíssima fidelidade (ex.: 16 subvoxels/bloco, ~6.25 cm por voxel).
+- **Arquitetura Modular Extensível**:
+  - Sistema universal de registros: blocos, itens, dimensões, partículas e geradores procedurais.
+  - API de plugins com ganchos de ciclo de vida (`setup`, `fixedUpdate`, `chunk:ready`).
+  - Terminal de comandos em tempo real (`CommandRegistry`).
+
+---
+
+## Arquitetura de Módulos
+
+O repositório impõe uma barreira arquitetural estrita verificada em CI (`npm run check:boundary`). O núcleo em `engine/` é totalmente independente e agnóstico a qualquer jogo ou demonstração específica contida em `examples/`.
 
 ```
-engine/                  Motor reutilizável (agnóstico a conteúdo)
-  ├── core/              VoxelEngine (thread principal, canvas, orquestração de workers)
-  ├── worker.ts          @voxel/engine/worker (loop físico a 20Hz, grafo Three.js, plugins)
-  ├── chunk-worker.ts    @voxel/engine/chunk-worker (geração de terreno, meshing, iluminação)
-  ├── chunk/             Chunk, ChunkManager e algoritmo de Greedy Meshing
-  ├── physics/           AABB, raycast de blocos, colisão contínua e física de fluidos
-  ├── player/            Controlador cinemático do jogador e interpolação de câmera
-  └── render/            Pipeline de materiais, iluminação e render loop Three.js
+engine/                     @voxel/engine (Pacote do motor)
+  ├── index.ts              Ponto de entrada na Main Thread (VoxelEngine)
+  ├── worker.ts             Ponto de entrada do Engine Worker (@voxel/engine/worker)
+  ├── chunk-worker.ts       Ponto de entrada do Chunk Worker (@voxel/engine/chunk-worker)
+  ├── core/                 Orquestração de viewport, canvas, eventos e bridge de workers
+  ├── world/                ProceduralWorld, geradores, chunks carregados e costura de bordas
+  ├── chunk/                Chunk, ChunkManager, ChunkGeometry (Greedy/Naive Meshing)
+  ├── render/               VoxelRaymarch, pipeline de materiais, shaders GLSL e uniforms
+  ├── physics/              AABB, raycast de precisão, FluidCellularAutomata e colisão
+  ├── player/               PlayerPhysics (cinemática 20Hz), controles e câmera
+  ├── blocks/               BlockRegistry (metadados, opacidade, luminosidade e fluidos)
+  ├── runtime/              EngineRuntime, ChunkRuntime e CommandRegistry
+  ├── dimension/            DimensionManager, parâmetros gravitacionais e atmosfera
+  ├── effects/              VoxelParticles e gerenciamento de emissores
+  └── types.ts              Contratos, opções de inicialização e interfaces TypeScript
 
-game/                    Conteúdo e gameplay construídos sobre a engine
-  ├── main.ts            Menu inicial, HUD, áudio e ciclo de vida
-  ├── workers/           Pontos de entrada dos workers (registram blocos e geradores)
-  ├── content/           Definições de blocos, dimensões, biomas e entidades
-  ├── dimensions/        DimensionManager e transição de mundos
-  ├── effects/           Efeitos visuais, fendas dimensionais e pós-processamento
-  └── plugins/           Plugins da engine (gameplay, chat, fauna, rede)
+examples/                   Aplicações de exemplo construídas sobre a engine
+  ├── tiny-voxels/          Micro-voxels (16 vx/bloco), raymarch DDA em GPU e cachoeiras vivas
+  └── game/                 Jogo voxel completo com múltiplas dimensões e multiplayer via WS
 ```
 
-### Pipeline de Web Workers
+### Pipeline de Execução Multi-Threaded
 
-A simulação e a renderização utilizam Web Workers para evitar quedas de quadros durante o carregamento de terreno:
+```mermaid
+flowchart LR
+    %% Subgraph 1: Main Thread
+    subgraph MT ["🖥️ Main Thread · 60/144+ FPS"]
+        direction TB
+        VE["<b>VoxelEngine</b><br/><small>Orquestrador da Viewport</small>"]
+        Canvas["<b>Canvas WebGL</b><br/><small>Renderização Three.js</small>"]
+        Input["<b>Input Controller</b><br/><small>Pointer Lock · Teclado · Mouse</small>"]
+        HUD["<b>DOM / Overlay</b><br/><small>HUD · Chat · Menus</small>"]
 
-1. **Main Thread (`VoxelEngine`)**:
-   - Inicializa a viewport, gerencia a interface DOM/HUD, captura inputs do usuário (Pointer Lock, teclado e mouse) e despacha eventos para os workers.
-2. **Engine Worker (`engine.worker.ts`)**:
-   - Executa o loop de simulação física a 20 ticks por segundo, processa entidades, atualiza a posição do jogador, orquestra plugins e mantém o grafo de cena do Three.js.
-3. **Chunk Worker (`chunk.worker.ts`)**:
-   - Responsável pelo processamento matemático pesado: geração procedural de ruídos 3D, flood fill de iluminação e síntese geométrica das malhas via Greedy Meshing. Os dados são enviados de volta prontos para a GPU através de `Transferable Objects` (Float32Array), sem custo de cópia de memória.
+        Input --> VE
+        VE --> Canvas
+        VE --> HUD
+    end
 
-### Sistema de Plugins
+    %% Subgraph 2: Engine Worker
+    subgraph EW ["⚙️ Engine Worker · 20 Hz Fixo"]
+        direction TB
+        ER["<b>EngineRuntime</b><br/><small>Loop de Simulação</small>"]
+        PW["<b>ProceduralWorld</b><br/><small>Chunks Ativos & Streaming</small>"]
+        PP["<b>PlayerPhysics</b><br/><small>Cinemática & AABB Sneak</small>"]
+        FCA["<b>FluidCellularAutomata</b><br/><small>Fluidos 3D & Reações</small>"]
+        Plugins["<b>Plugin System</b><br/><small>EngineContext & Comandos</small>"]
 
-A lógica de jogo se conecta à engine através de plugins modulares que recebem o `EngineContext`:
+        ER --> PW
+        ER --> PP
+        ER --> FCA
+        ER --> Plugins
+    end
+
+    %% Subgraph 3: Chunk Worker
+    subgraph CW ["🧱 Chunk Worker · Background Task"]
+        direction TB
+        CR["<b>ChunkRuntime</b><br/><small>Gerenciador de Tarefas</small>"]
+        WG["<b>WorldGenerator</b><br/><small>Ruído 3D Simplex & Biomas</small>"]
+        Light["<b>Light Engine</b><br/><small>3D Flood Fill (0-15)</small>"]
+        Mesher["<b>ChunkGeometry</b><br/><small>Greedy Mesher / DDA 3D</small>"]
+
+        CR --> WG
+        WG --> Light
+        Light --> Mesher
+    end
+
+    %% Conexões entre Threads
+    VE <== "<b>postMessage</b><br/><i>Inputs, Câmera & Raycast</i>" ==> ER
+    ER <== "<b>Zero-Copy Transferable</b><br/><i>Float32Array Buffers</i>" ==> CR
+    ER -. "<b>Upload GPU</b><br/><i>Malhas & Texturas 3D</i>" .-> Canvas
+
+    %% Estilização Moderna
+    classDef mainThread fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef engineWorker fill:#1e1b4b,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
+    classDef chunkWorker fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#f8fafc;
+
+    class VE,Canvas,Input,HUD mainThread;
+    class ER,PW,PP,FCA,Plugins engineWorker;
+    class CR,WG,Light,Mesher chunkWorker;
+```
+
+---
+
+## Como Utilizar a Engine
+
+### 1. Inicializando na Main Thread
+
+No script da página principal:
 
 ```ts
-export const meuPlugin: EnginePlugin = {
+import { VoxelEngine } from '@voxel/engine';
+
+const engine = new VoxelEngine({
+  canvas: document.getElementById('renderCanvas') as HTMLCanvasElement,
+  // Fábrica para criar o worker que executa o loop da engine:
+  createWorker: () => new Worker(
+    new URL('./workers/engine.worker.ts', import.meta.url),
+    { type: 'module' }
+  )
+});
+
+await engine.init();
+```
+
+### 2. Configurando o Engine Worker
+
+No arquivo `engine.worker.ts`:
+
+```ts
+import { runEngineWorker, type EngineContext, type EnginePlugin } from '@voxel/engine/worker';
+
+// Plugin customizado para lógica do seu projeto
+const meuPlugin: EnginePlugin = {
   name: 'meu-plugin',
-  setup(ctx) {
-    ctx.commands.register('/ola', () => ctx.emitToMain('chat:message', { text: 'Olá!' }));
-    ctx.on('fixedUpdate', ({ deltaMs }) => { /* física ou lógica a cada tick */ });
-    ctx.world.events.on('chunk:ready', ({ data }) => { /* chunk carregado */ });
-    ctx.onMessage('minha-msg', (payload) => { /* comunicação direta com a main thread */ });
+  setup(ctx: EngineContext) {
+    ctx.commands.register(['/ping'], () => {
+      ctx.emitToMain('chat:message', { text: 'pong!' });
+    });
+
+    ctx.on('fixedUpdate', ({ deltaMs }) => {
+      // Executado a cada tick físico fixo (20 Hz)
+    });
   }
 };
+
+runEngineWorker({
+  // Fábrica para instanciar workers de processamento pesado de chunks
+  createChunkWorker: () => new Worker(
+    new URL('./chunk.worker.ts', import.meta.url),
+    { type: 'module' }
+  ),
+  plugins: [meuPlugin],
+  world: {
+    chunkSize: 32,
+    voxelsPerBlock: 1, // 1 = voxel padrão, 16 = minivoxels
+    fluidSimulation: 'cellular_automata'
+  }
+});
+```
+
+### 3. Registrando Blocos e Gerador no Chunk Worker
+
+No arquivo `chunk.worker.ts`:
+
+```ts
+import {
+  runChunkWorker,
+  blockRegistry,
+  worldGeneratorRegistry,
+  type ChunkContext,
+  type WorldGenerator
+} from '@voxel/engine/chunk-worker';
+
+// Registra tipos de blocos
+blockRegistry.register({
+  id: 1,
+  name: 'Pedra',
+  color: 0x7A7D84,
+  solid: true,
+  opaque: true
+});
+
+blockRegistry.register({
+  id: 2,
+  name: 'Água Cristalina',
+  color: 0x3388CC,
+  solid: false,
+  fluid: true,
+  transparent: true,
+  lightOpacity: 2
+});
+
+// Registra um gerador de mundo procedural
+class MeuGerador implements WorldGenerator {
+  public readonly id = 'meu_gerador';
+
+  generate(ctx: ChunkContext): void {
+    const { startX, endX, startY, endY, startZ, endZ } = ctx;
+    for (let x = startX; x < endX; x++) {
+      for (let z = startZ; z < endZ; z++) {
+        const height = Math.floor(ctx.simplex.noise(x * 0.02, z * 0.02) * 10) + 16;
+        for (let y = startY; y < endY; y++) {
+          if (y <= height) {
+            ctx.setBlock(x, y, z, 1);
+          } else if (y <= 14) {
+            ctx.setBlock(x, y, z, 2);
+          }
+        }
+      }
+    }
+  }
+}
+
+worldGeneratorRegistry.register(new MeuGerador());
+runChunkWorker();
 ```
 
 ---
 
-## Otimização de Malha (Greedy Meshing)
+## Módulos Centrais da Engine
 
-Em vez de renderizar cubos individuais (o que geraria milhares de triângulos invisíveis), o motor utiliza **Greedy Meshing**:
+### 1. `FluidCellularAutomata` (Simulação de Fluidos em Partículas)
+Localização: `engine/physics/FluidCellularAutomata.ts`
 
-1. **Descarte de Oclusão**: Faces adjacentes a blocos opacos são sumariamente eliminadas antes da montagem geométrica.
-2. **Mesclagem de Faces Coplanares**: O algoritmo varre fatias 2D em cada um dos eixos (X, Y, Z). Blocos vizinhos com as mesmas propriedades de material, iluminação e normais são agrupados em quadriláteros únicos e contínuos.
-3. **Resultados**: Redução de mais de 80% na contagem de vértices e triângulos, minimizando chamadas de desenho (*draw calls*) e permitindo distâncias de renderização elevadas no navegador.
+Simulador tridimensional por autômato celular baseado em conservação física:
+- **Fluxo por Gravidade**: Fluido desloca-se verticalmente para baixo no espaço contíguo passável.
+- **Cascata em Encostas**: Queda diagonal ao deslizar por rampas, bordas e desfiladeiros.
+- **Espalhamento Hidrostático**: Nivelamento horizontal acionado exclusivamente sob pressão de coluna de voxels superiores ou bordas de penhasco (*ledges*).
+- **Repouso Otimizado (*Sleep State*)**: Células estáveis são removidas do conjunto ativo; grandes corpos d'água estáticos possuem custo zero de processamento.
+- **Termoquímica Dinâmica**: Reação exotérmica instantânea entre materiais aquosos e magmáticos (geração de Basalto com ejeção de partículas de vapor).
+- **Nascentes Naturais (`WaterSpring`)**: Emissão periódica contínua em fontes abertas, sustentando cascatas e cachoeiras vivas sem risco de transbordamento.
 
----
+### 2. `VoxelRaymarch` (Renderização Volumétrica em GPU)
+Localização: `engine/render/VoxelRaymarch.ts`
 
-## Iluminação Voxel
+Pipeline de raymarching em fragment shader para representação de voxels em alta resolução:
+- Renderiza volumes armazenados em texturas 3D (`Data3DTexture`) sem gerar vértices na CPU.
+- **Hierarchical DDA (BrickMap)**: Pula caixas delimitadoras de blocos vazios (*empty space skipping*), reduzindo passos de amostragem por raio em até 6x em terrenos abertos.
+- Ideal para mundos com micro-relevo escavável onde a contagem de quads poligonais inviabilizaria o pipeline tradicional.
 
-A engine implementa um sistema de iluminação volumétrica em grade:
+### 3. `ChunkGeometry` (Greedy Meshing e Otimização Geométrica)
+Localização: `engine/chunk/ChunkGeometry.ts`
 
-- **Dois Canais de Luz (0 a 15)**:
-  - **Sky Light**: Luz solar que penetra verticalmente pelo mundo e atenua ao entrar em cavernas e túneis fechados.
-  - **Block Light**: Luz emitida por blocos luminosos (tochas, lava, pedras incandescentes) e propagada tridimensionalmente.
-- **Propagação por Flood Fill**:
-  - Quando a luz se propaga, cada passo para um bloco vizinho transparente diminui o nível em 1 unidade.
-  - O cálculo da iluminação de cada chunk é feito pelo Chunk Worker durante a geração. A engine costura as bordas entre chunks contíguos de forma assíncrona.
-- **Atualização Incremental em Tempo Real**:
-  - Ao colocar ou quebrar um bloco emissor ou opaco, apenas os nós de luz afetados são recalculados através de filas BFS de adição e remoção, sem necessidade de regerar o terreno vizinho.
-- **Smooth Lighting por Vértice**:
-  - Os valores de luz dos blocos adjacentes e a oclusão de ambiente (AO) são interpolados nos vértices dos polígonos no shader, gerando sombras suaves e cantos sombreados sem custo adicional de geometria.
+Síntese poligonal para renderização clássica em GPU:
+- Varredura de oclusão bidimensional descartando faces cegas entre blocos sólidos.
+- Fusão de retângulos coplanares contíguos de mesmo material e mesmo estado de iluminação.
+- Geração simultânea de normais, cores por vértice, coordenadas UV e atributos de *Ambient Occlusion*.
 
----
+### 4. `PlayerPhysics` (Cinemática e Controle de Jogador)
+Localização: `engine/player/PlayerPhysics.ts`
 
-## Física e Movimento
-
-O controlador do jogador reproduz as fórmulas do Minecraft 1.8:
-
-- **Tempo Discreto**: Loop físico executado a 20 ticks por segundo, enquanto a câmera é interpolada a 60/144 Hz para renderização suave.
-- **Cinemática**:
-  - Aceleração e desaceleração baseadas no atrito do bloco em que o jogador pisa (`slipperiness`).
-  - Preservação de velocidade em pulo contínuo durante a corrida (*sprint-jumping*).
-  - Trava em bordas (*sneak*): ao andar agachado com Shift, o sistema de colisão impede que a caixa delimitadora (AABB) caia de blocos com ar abaixo.
-  - Dinâmica de fluidos com flutuabilidade e resistência proporcional em água e lava.
-
----
-
-## Controles
-
-| Tecla / Ação | Função |
-| :--- | :--- |
-| **W, A, S, D** | Movimentação horizontal |
-| **Espaço** | Pular / Nadar para cima |
-| **2x W** ou **Ctrl** | Correr (*Sprint*) |
-| **Shift** | Agachar (*Sneak* - trava em quinas) |
-| **Clique Esquerdo** | Destruir bloco mirado |
-| **Clique Direito** | Colocar bloco selecionado |
-| **Scroll do Mouse** ou **1-9** | Selecionar bloco na Hotbar |
-| **;** ou **Enter** | Abrir/fechar console de chat |
-| **Esc** | Abrir/fechar menu do jogo |
+Motor cinemático fiel aos padrões de precisão:
+- Resolução de colisões AABB contínuas em caixas de 0.6 × 1.8 blocos.
+- Diferenciação de atrito em superfícies terrestres, aquáticas e viscosas.
+- Suporte a agachamento com trava em bordas (*sneak*), prevenindo quedas acidentais em desníveis.
 
 ---
 
-## Comandos do Console / Chat
+## Exemplos Inclusos
 
-Pressione `;` no jogo para abrir a barra de comandos:
+O repositório disponibiliza implementações completas demonstrando as capacidades da engine em diferentes configurações:
 
-- `/clima [limpo|chuva|tempestade|tornado|areia]` ou `/weather [type]`: Altera o clima dinamicamente com transição suave (chuva vira neve em biomas gélidos, e tempestades de areia só ocorrem no deserto).
-- `/tornado [spawn|clear]` ou `/redemoinho`: Gera ou dissipa um tornado colossal com vórtice e sucção física.
-- `/sandstorm` ou `/areia`: Inicia uma tempestade de areia (disponível exclusivamente no bioma de deserto).
-- `/storm` ou `/tempestade`: Inicia tempestade severa com trovões e relâmpagos (vira nevasca em biomas frios e não produz chuva no deserto).
-- `/thunder`: Dispara um raio imediato que ilumina céu, nuvens e chão.
-- `/shaders [on|off]`: Alterna entre shaders avançados e o modo de compatibilidade/fallback com materiais unlit.
-- `/dim [overworld|nether|lunar|mercury|volcanic|astral_void|cavern]`: Teleporta para a dimensão especificada.
-- `/dim list`: Lista todas as dimensões disponíveis e parâmetros de gravidade.
-- `/dim info`: Exibe detalhes da dimensão atual.
-- `/rift [dimensão]` ou `/fenda`: Abre uma fenda de viagem interdimensional.
-- `/regen [dimensão]`: Regenera o terreno atual com o gerador informado.
-- `/time [day|night|noon|midnight|<número>]`: Ajusta o horário do ciclo dia/noite.
-- `/tp <x> <y> <z>`: Teleporta o jogador para coordenadas absolutas.
-- `/bobbing [on|off]`: Ativa ou desativa o balanço dinâmico da câmera ao andar.
-- `/help`: Exibe a lista de comandos no chat.
+1. **`examples/tiny-voxels` (Minivoxels & Raymarching DDA)**:
+   - Resolução fina de 16 minivoxels por bloco (escala de 6.25 cm).
+   - Renderização por GPU Raymarching volumétrico e Greedy Meshing alternáveis.
+   - Autômato celular de fluidos integrado com cachoeiras naturais ativas.
+   - Geração procedural volumétrica com 5 biomas ricos (*Picos Alpinos*, *Santuário de Sakura*, *Cânions de Terracota*, *Bosque de Outono* e *Vales Fluviais*).
+   - Ferramentas de escultura esférica contínua com brocas de raio ajustável.
+
+2. **`examples/game` (Jogo Voxel Completo & Multiplayer)**:
+   - Resolução de bloco clássico de 1m³.
+   - Sistema multi-dimensional (*Overworld*, *Nether*, *Lunar*, *Volcanic*, *Cavern*).
+   - Ciclo dinâmico de dia/noite e sistema climático (chuva, neve, tempestade com raios e tornados físicos).
+   - Sincronização de jogadores e modificações de blocos em tempo real via WebSocket.
 
 ---
 
-## Tecnologias
-
-- **TypeScript**: Tipagem estrita em todo o motor e camada de jogo.
-- **Three.js**: Renderização 3D WebGL, câmeras, malhas com buffers e materiais GLSL.
-- **Web Workers**: Concorrência assíncrona para geração procedural e física.
-- **Vite**: Servidor de desenvolvimento rápido e bundler otimizado para produção.
-
----
-
-## Executando Localmente
+## Desenvolvimento Local
 
 ### Pré-requisitos
-- Node.js 18+ instalado
-- npm ou yarn
+- **Node.js** (v18 ou superior)
+- **npm** (incluso com Node)
 
-### Instalação
+### Comandos
+
 ```bash
-git clone https://github.com/otavio-rb/voxel-engine.js.git
-cd voxel-engine.js
+# Instalar dependências
 npm install
+
+# Iniciar servidor local de desenvolvimento (Vite)
 npm run dev
+
+# Validação completa de qualidade (TypeScript + Checagem de Fronteira de Engine + Shared Chunks)
+npm run check
+
+# Compilação para produção
+npm run build
+
+# Pré-visualização do build de produção
+npm run preview
 ```
 
-### Scripts do Projeto
-```bash
-npm run dev             # Inicia o servidor local Vite
-npm run build           # Compila para produção
-npm run preview         # Visualiza o build de produção localmente
-npm run typecheck       # Verificação de tipos TypeScript
-npm run check:boundary  # Valida o desacoplamento estrito entre engine e game
-```
+### Scripts de Validação
+
+- `npm run check:boundary`: Garante que o diretório `engine/` não importe nenhum arquivo de `examples/` ou código externo ao motor.
+- `npm run check:shared`: Valida a integridade da política de Copy-on-Write em buffers de chunks compartilhados.
 
 ---
 
-## Próximos Passos
+## Licença
 
-- [x] Sistema de colisão contínua e resolução de AABB por eixo
-- [x] Iluminação Voxel (Sky Light + Block Light) com Smooth Lighting e AO
-- [x] Suporte modular a múltiplas dimensões
-- [ ] Persistência de mundo no navegador (IndexedDB)
-- [ ] Sincronização multiplayer via WebSockets
+Distribuído sob licença MIT. Consulte o arquivo `LICENSE` para mais detalhes.
