@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html class="light" lang="pt-BR" data-bilingual="true">
+<head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <title data-lang="pt">types · Docs @voxel/engine</title>
+  <title data-lang="en" hidden>types · @voxel/engine Docs</title>
+  <meta name="description" data-lang="pt" content="Referência de types (engine/types.ts) com demonstração executável ao vivo."/>
+  <meta name="description" data-lang="en" content="Reference for types (engine/types.ts) with a live, runnable demo." hidden/>
+  <link rel="icon" type="image/svg+xml" href="/docs/src/favicon.svg"/>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "on-surface-variant": "#475569",
+            "outline-variant": "#e2e8f0",
+            "on-surface": "#0f172a",
+            "tertiary": "#7c3aed",
+            "surface-variant": "#f8fafc",
+            "primary": "#059669",
+            "surface": "#ffffff"
+          },
+          fontFamily: {
+            "display": ["Plus Jakarta Sans", "Inter", "sans-serif"],
+            "body-md": ["Inter", "sans-serif"],
+            "code-inline": ["JetBrains Mono", "monospace"],
+            "label-sm": ["JetBrains Mono", "monospace"],
+            "badge-voxel": ["JetBrains Mono", "monospace"]
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    @layer base { html, body { margin: 0; padding: 0; } }
+  </style>
+  <style>
+    html, body { background-color: #0b0f17; }
+    .bg-white, .bg-white\/85, .bg-white\/95 { background-color: #0b0f17 !important; }
+    .bg-slate-50 { background-color: #121826 !important; }
+    .bg-slate-100, .hover\:bg-slate-50:hover, .hover\:bg-slate-100:hover, .hover\:bg-white:hover { background-color: #1a2232 !important; }
+    .bg-slate-200 { background-color: #263044 !important; }
+    .border-slate-200 { border-color: #232c3d !important; }
+    .border-slate-300, .hover\:border-slate-300:hover { border-color: #2e3a4e !important; }
+    .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #232c3d !important; }
+    .text-slate-900, .hover\:text-slate-900:hover { color: #f1f5f9 !important; }
+    .text-slate-800, .hover\:text-slate-800:hover { color: #dce3ec !important; }
+    .text-slate-700 { color: #c3ccd9 !important; }
+    .text-slate-600 { color: #a3aec0 !important; }
+    .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.14) !important; }
+    .border-emerald-200 { border-color: rgba(16, 185, 129, 0.35) !important; }
+    .text-emerald-700, .hover\:text-emerald-700:hover { color: #34d399 !important; }
+    .text-emerald-800, .hover\:text-emerald-800:hover { color: #6ee7b7 !important; }
+    .text-emerald-900 { color: #6ee7b7 !important; }
+    .bg-sky-50 { background-color: rgba(56, 189, 248, 0.14) !important; }
+    .border-sky-200 { border-color: rgba(56, 189, 248, 0.4) !important; }
+    .text-sky-800, .text-sky-900 { color: #7dd3fc !important; }
+    .bg-amber-50 { background-color: rgba(245, 158, 11, 0.14) !important; }
+    .text-amber-900 { color: #fcd34d !important; }
+
+    html { scrollbar-width: thin; scrollbar-color: #2e3a4e #0b0f17; }
+    *::-webkit-scrollbar { width: 10px; height: 10px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-thumb { background-color: #2e3a4e; border-radius: 6px; border: 2px solid #0b0f17; }
+    *::-webkit-scrollbar-thumb:hover { background-color: #3c4a61; }
+    *::-webkit-scrollbar-corner { background: #0b0f17; }
+  </style>
+</head>
+<body class="bg-white font-body-md text-slate-800 antialiased selection:bg-emerald-100 selection:text-emerald-900" data-module="types">
+
+  <header class="fixed top-0 left-0 right-0 h-16 bg-white/85 backdrop-blur-xl border-b border-slate-200/80 z-50 flex items-center justify-between px-6 shadow-sm">
+    <div class="flex items-center gap-4">
+      <button id="mobile-menu-btn" class="md:hidden text-slate-800 p-1 hover:bg-slate-100 rounded" aria-label="Abrir Menu">
+        <span class="material-symbols-outlined text-[22px]">menu</span>
+      </button>
+      <a href="/docs/" class="flex items-center gap-3">
+        <img src="/docs/src/logo-animated.svg" alt="@voxel/engine" class="w-8 h-8 rounded-lg"/>
+        <span class="font-code-inline font-bold tracking-tight text-slate-900 text-base">@voxel/engine</span>
+        <span class="font-badge-voxel text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200">v0.9.4-beta</span>
+      </a>
+    </div>
+    
+    <div class="flex items-center gap-4">
+      <nav class="hidden lg:flex items-center gap-4 text-xs font-medium">
+        <a class="text-slate-600 hover:text-slate-900 transition-colors" href="/docs/"><span data-lang="pt" class="">Manual</span><span data-lang="en" class="" hidden>Manual</span></a>
+        <a class="text-emerald-700 font-semibold" href="/docs/api/"><span data-lang="pt" class="">Docs</span><span data-lang="en" class="" hidden>Docs</span></a>
+        <a class="text-slate-600 hover:text-emerald-700 transition-colors flex items-center gap-1" href="https://voxel-engine-js.vercel.app" target="_blank" rel="noreferrer">
+          <span data-lang="pt" class="">Demo Online</span><span data-lang="en" class="" hidden>Live Demo</span><span class="material-symbols-outlined text-[14px]">open_in_new</span>
+        </a>
+      </nav>
+      <div class="h-4 w-px bg-slate-200 hidden lg:block"></div>
+      <div class="flex items-center gap-2">
+        <div class="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-mono" id="docs-lang-toggle" title="Alterar idioma / Switch language">
+          <button type="button" data-lang="pt" class="px-2 py-0.5 rounded font-semibold transition-all bg-slate-700 text-emerald-400 shadow-xs">PT</button>
+          <button type="button" data-lang="en" class="px-2 py-0.5 rounded font-semibold transition-all text-slate-500 hover:text-slate-200">EN</button>
+        </div>
+        <a class="flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 rounded-lg border border-slate-200 font-code-inline text-xs text-slate-700 hover:bg-slate-100 transition-colors" href="https://github.com/voxel/engine" target="_blank" rel="noreferrer">
+          <span class="material-symbols-outlined text-[16px]">code</span><span>GitHub</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <aside id="docs-sidebar" class="fixed left-0 top-16 bottom-0 w-72 bg-white/95 backdrop-blur-md z-40 overflow-y-auto px-3 py-5 flex flex-col gap-4 border-r border-slate-200 transition-transform -translate-x-full md:translate-x-0">
+    <nav class="flex flex-col gap-0.5 px-1">
+      <a class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 hover:text-slate-900 text-xs transition-colors" href="/docs/">
+        <span class="material-symbols-outlined text-[16px] text-emerald-600">arrow_back</span><span data-lang="pt" class="">Voltar ao Manual</span><span data-lang="en" class="" hidden>Back to Manual</span>
+      </a>
+    </nav>
+    <div id="api-nav" class="px-1"></div>
+    
+  </aside>
+  <div class="md:pl-72">
+    <main class="w-full min-h-screen pt-20 bg-white px-6 lg:px-12 max-w-[980px] mx-auto pb-24">
+      <section class="flex items-center gap-2 text-slate-500 text-xs mb-5">
+        <a class="hover:text-emerald-700 transition-colors flex items-center gap-1" href="/docs/api/">
+          <span class="material-symbols-outlined text-[14px]">api</span><span>Docs</span>
+        </a>
+        <span class="text-slate-300">/</span>
+        <span id="api-crumb">Blocos & Volume</span>
+        <span class="text-slate-300">/</span>
+        <span class="text-emerald-700 font-semibold">types</span>
+      </section>
+
+      <article id="api-module"></article>
+
+      <nav class="api-pager">
+        <a id="api-prev" class="api-pager-link" href="#">
+          <span class="material-symbols-outlined">arrow_back</span>
+          <span><small>anterior</small><span class="name"></span></span>
+        </a>
+        <a id="api-next" class="api-pager-link next" href="#">
+          <span><small>próximo</small><span class="name"></span></span>
+          <span class="material-symbols-outlined">arrow_forward</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+  <script type="module" src="../module.ts"></script>
+  <script type="module" src="/docs/src/lang-switcher.js"></script>
+</body>
+</html>
