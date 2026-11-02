@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voxel Engine — Google 3D Tiles (Av. Paulista / MASP)</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <!-- Canvas 3D Principal -->
+    <canvas id="scene"></canvas>
+    <div id="underwater-overlay"></div>
+    <div id="nuclear-flash-overlay"></div>
+
+    <!-- Banner de progresso do Google Photorealistic 3D Tiles -->
+    <div id="geo-status-banner" class="geo-status-banner" style="display: none;">
+      <div class="geo-status-header">
+        <span class="geo-status-dot"></span>
+        <span id="geo-status-text">Carregando Google Photorealistic 3D Tiles...</span>
+      </div>
+      <div class="geo-status-bar">
+        <div id="geo-status-fill" class="geo-status-fill" style="width: 15%;"></div>
+      </div>
+    </div>
+
+    <!-- Menu Principal / Pausa (Estilo Clássico Voxel) -->
+    <div id="world-menu" class="menu-overlay">
+      <div class="mc-panel">
+        <h1 class="mc-title" id="menu-title">Google 3D Tiles • Geo-Voxels</h1>
+
+        <!-- Seleção de Mundo -->
+        <div class="mc-section">
+          <div class="mc-section-header">
+            <span class="mc-label">Local Real (Google Maps 3D Tiles) ou Dimensão</span>
+          </div>
+
+          <div class="mc-world-grid" id="world-grid">
+            <button class="mc-btn world-btn active" data-type="paulista_masp">Av. Paulista / MASP</button>
+            <button class="mc-btn world-btn" data-type="trianon">Parque Trianon</button>
+            <button class="mc-btn world-btn" data-type="cristo">Cristo Redentor</button>
+            <button class="mc-btn world-btn" data-type="congresso">Congresso Nacional</button>
+            <button class="mc-btn world-btn" data-type="standard">Padrão</button>
+            <button class="mc-btn world-btn" data-type="aether">The Aether</button>
+            <button class="mc-btn world-btn" data-type="nether">O Nether</button>
+            <button class="mc-btn world-btn" data-type="astral_void">Vácuo Astral</button>
+            <button class="mc-btn world-btn" data-type="flat">Plano</button>
+            <button class="mc-btn world-btn" data-type="cavern">Cavernas</button>
+            <button class="mc-btn world-btn" data-type="lunar">Lunar</button>
+            <button class="mc-btn world-btn" data-type="mercury">Mercúrio</button>
+            <button class="mc-btn world-btn" data-type="volcanic">Vulcânico</button>
+          </div>
+
+          <div class="mc-desc-box" id="world-desc">
+            Av. Paulista / MASP (Google 3D Tiles): Reconstrução 3D fotogramétrica real dos pórticos vermelhos e Vão Livre do MASP, árvores do Parque Trianon e arranha-céus da Avenida Paulista.
+          </div>
+        </div>
+
+        <!-- Opções de Jogo -->
+        <div class="mc-options-grid">
+          <div class="mc-option-item">
+            <button class="mc-btn mc-btn-full" id="btn-mode-toggle" data-mode="debug">
+              Modo: <span id="mode-text">Criativo (Voo)</span>
+            </button>
+            <div class="mc-subdesc" id="mode-desc">Voo livre e blocos infinitos</div>
+          </div>
+
+          <div class="mc-option-item">
+            <button class="mc-btn mc-btn-full" id="shaders-toggle">
+              <span id="shaders-text">Sombras: Ativado</span>
+            </button>
+            <div class="mc-subdesc">Iluminação e sombras dinâmicas</div>
+          </div>
+
+          <div class="mc-option-item">
+            <button class="mc-btn mc-btn-full" id="debug-toggle">
+              <span id="debug-text">HUD Desempenho: Ativado</span>
+            </button>
+            <div class="mc-subdesc">Métricas e gráfico de latência (F3)</div>
+          </div>
+        </div>
+
+        <!-- Botões de Ação -->
+        <div class="mc-actions">
+          <button id="btn-resume" class="mc-btn mc-btn-action" style="display: none;">
+            Voltar ao Jogo
+          </button>
+          <button id="btn-generate" class="mc-btn mc-btn-action">
+            <span id="btn-generate-text">Entrar no Mundo</span>
+          </button>
+          <button id="btn-clear-geo-cache" class="mc-btn mc-btn-action" title="Limpa o cache local IndexedDB e baixa os blocos 3D novamente">
+            Recarregar 3D Tiles
+          </button>
+        </div>
+
+        <div class="mc-footer-tips">
+          WASD: Mover &bull; Espaço (2x): Voar &bull; E: Inventário &bull; F3: Desempenho &bull; R: Raio &bull; G: Laser &bull; B: Buraco Negro &bull; ;: Comandos &bull; ESC: Pausa
+        </div>
+      </div>
+    </div>
+
+    <!-- Interface In-Game -->
+    <div id="crosshair"></div>
+
+    <div id="debug">
+      <div id="stats"></div>
+    </div>
+
+    <div id="interface">
+      <!-- Hotbar Principal (9 Slots) -->
+      <div id="hotbar"></div>
+
+      <!-- Modal de Inventário de Blocos (Abre com a tecla E) -->
+      <div id="inventory-modal" class="inventory-modal-hidden">
+        <div class="inventory-backdrop" id="inventory-backdrop"></div>
+        <div class="inventory-panel">
+          <!-- Cabeçalho do Inventário -->
+          <div class="inventory-header">
+            <div class="inventory-title">
+              <span class="inv-icon">🧱</span>
+              <span>Catálogo de Blocos</span>
+            </div>
+            <div class="inventory-search-box">
+              <input type="text" id="inventory-search" placeholder="Buscar bloco..." autocomplete="off" />
+            </div>
+            <button id="inventory-close-btn" class="inventory-close-btn" title="Fechar (E ou ESC)">✕</button>
+          </div>
+
+          <!-- Abas de Categorias -->
+          <div class="inventory-categories" id="inventory-categories">
+            <button class="inv-cat-btn active" data-category="all">Todos</button>
+            <button class="inv-cat-btn" data-category="urban">Cidade &amp; MASP</button>
+            <button class="inv-cat-btn" data-category="building">Construção &amp; Pedras</button>
+            <button class="inv-cat-btn" data-category="nature">Natureza &amp; Flora</button>
+            <button class="inv-cat-btn" data-category="fungi">Fungos &amp; Caverna</button>
+            <button class="inv-cat-btn" data-category="special">Especiais &amp; Aether</button>
+          </div>
+
+          <!-- Grade Rolável de Todos os Blocos -->
+          <div class="inventory-catalog-container">
+            <div id="inventory-grid" class="inventory-grid"></div>
+          </div>
+
+          <!-- Rodapé do Inventário: Prévia sincronizada da Hotbar -->
+          <div class="inventory-footer">
+            <div class="inv-footer-hint">
+              💡 <strong>Clique</strong> em um bloco para equipar no slot ativo ou pressione <strong>1–9</strong> passando o mouse sobre o bloco.
+            </div>
+            <div class="inventory-hotbar-preview-wrapper">
+              <div class="inv-hotbar-title">Equipado na Hotbar (Slots 1 – 9)</div>
+              <div id="inventory-hotbar-preview" class="inventory-hotbar-preview"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-wrapper">
+        <div class="chat"></div>
+        <div class="chat-input-container">
+          <input class="chat-input" type="text" placeholder="Digite /help para comandos..." />
+          <button id="chat-send-btn" class="chat-btn chat-send-btn" type="button" title="Enviar comando (Enter)">Enviar</button>
+          <button id="chat-close-btn" class="chat-btn chat-close-btn" type="button" title="Fechar chat (ESC)">✕</button>
+        </div>
+      </div>
+
+      <!-- Controles Mobile Touch (Estilo Minecraft Bedrock) -->
+      <div id="mobile-controls" class="mobile-controls-hidden">
+        <!-- Botões Superiores (Chat e Menu/Pausa) -->
+        <div id="mobile-top-bar">
+          <button id="btn-mobile-inventory" class="mobile-top-btn" type="button" aria-label="Inventário">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+          </button>
+          <button id="btn-mobile-chat" class="mobile-top-btn" type="button" aria-label="Abrir Chat">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          </button>
+          <button id="btn-mobile-menu" class="mobile-top-btn" type="button" aria-label="Pausar Jogo">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+          </button>
+        </div>
+
+        <!-- Esquerda: D-Pad direcional clássico -->
+        <div id="mobile-left-controls">
+          <div id="mobile-dpad">
+            <button id="dpad-up" class="dpad-btn dpad-up" type="button" aria-label="Frente">▲</button>
+            <div class="dpad-middle-row">
+              <button id="dpad-left" class="dpad-btn dpad-left" type="button" aria-label="Esquerda">◀</button>
+              <button id="dpad-center" class="dpad-btn dpad-center" type="button" aria-label="Correr">✦</button>
+              <button id="dpad-right" class="dpad-btn dpad-right" type="button" aria-label="Direita">▶</button>
+            </div>
+            <button id="dpad-down" class="dpad-btn dpad-down" type="button" aria-label="Trás">▼</button>
+          </div>
+        </div>
+
+        <!-- Direita: Botões de Pulo, Voo e Ações de Bloco -->
+        <div id="mobile-right-controls">
+          <div class="mobile-actions-row">
+            <button id="btn-mobile-break" class="mobile-btn mobile-btn-break" type="button">
+              <span class="mobile-btn-icon">⛏</span>
+              <span class="mobile-btn-label">Quebrar</span>
+            </button>
+            <button id="btn-mobile-place" class="mobile-btn mobile-btn-place" type="button">
+              <span class="mobile-btn-icon">🧱</span>
+              <span class="mobile-btn-label">Colocar</span>
+            </button>
+          </div>
+          <div class="mobile-movement-row">
+            <button id="btn-mobile-down" class="mobile-btn mobile-btn-sub" type="button" aria-label="Descer">▼ Descer</button>
+            <button id="btn-mobile-fly" class="mobile-btn mobile-btn-sub" type="button" aria-label="Alternar Voo">🕊 Voo</button>
+            <button id="btn-mobile-jump" class="mobile-btn mobile-btn-jump" type="button" aria-label="Pular">▲ Pular</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

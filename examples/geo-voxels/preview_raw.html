@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Google Photorealistic 3D Tiles - Visualização Completa Original (Sem Voxel)</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+    html, body, #cesiumContainer {
+      width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+    }
+    #ui-panel {
+      position: absolute; top: 18px; left: 18px; z-index: 99;
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 14px;
+      padding: 18px 22px;
+      color: #fff;
+      box-shadow: 0 16px 36px rgba(0,0,0,0.5);
+      max-width: 380px;
+    }
+    h2 { margin: 0 0 6px 0; font-size: 18px; font-weight: 700; color: #60a5fa; letter-spacing: -0.3px; }
+    p { margin: 0 0 16px 0; font-size: 13px; color: #94a3b8; line-height: 1.45; }
+    .btn-group { display: flex; flex-direction: column; gap: 8px; }
+    .loc-btn {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 10px;
+      color: #f1f5f9;
+      padding: 11px 16px;
+      font-size: 13.5px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .loc-btn:hover {
+      background: rgba(37, 99, 235, 0.6);
+      border-color: #3b82f6;
+      transform: translateY(-1px);
+    }
+    .loc-btn.active {
+      background: #2563eb;
+      border-color: #60a5fa;
+      box-shadow: 0 0 16px rgba(37, 99, 235, 0.4);
+    }
+    .badge {
+      font-size: 11px;
+      background: rgba(255,255,255,0.18);
+      padding: 3px 8px;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-weight: 600;
+    }
+    #status-badge {
+      position: absolute; bottom: 24px; left: 24px; z-index: 99;
+      background: rgba(15, 23, 42, 0.90); color: #4ade80;
+      padding: 9px 16px; border-radius: 30px; font-size: 12.5px; font-weight: 500;
+      border: 1px solid rgba(74, 222, 128, 0.35);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      transition: opacity 0.4s ease;
+    }
+    #controls-tip {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 11.5px;
+      color: #64748b;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui-panel">
+    <h2>Google 3D Tiles • Fotogrametria Real</h2>
+    <p>Visualização fotogramétrica 100% contínua e original da Google Maps Platform (sem nenhuma voxelização), com streaming oficial de malhas, texturas, esplanadas e vazios arquitetônicos.</p>
+    <div class="btn-group">
+      <button class="loc-btn active" id="btn-congresso">
+        <span>🏛️ Congresso Nacional</span>
+        <span class="badge">Brasília</span>
+      </button>
+      <button class="loc-btn" id="btn-masp">
+        <span>🏢 MASP & Av. Paulista</span>
+        <span class="badge">São Paulo</span>
+      </button>
+      <button class="loc-btn" id="btn-cristo">
+        <span>⛰️ Cristo Redentor</span>
+        <span class="badge">Rio de Janeiro</span>
+      </button>
+      <button class="loc-btn" id="btn-trianon">
+        <span>🌳 Parque Trianon</span>
+        <span class="badge">Mata Atlântica</span>
+      </button>
+    </div>
+    <div id="controls-tip">
+      💡 <b>Controles:</b> Botão esquerdo para orbitar/rotacionar • Botão direito ou Scroll para Zoom • Roda do mouse pressionada para inclinar câmera.
+    </div>
+  </div>
+  <div id="status-badge">Conectando ao Google 3D Tiles...</div>
+  <div id="cesiumContainer"></div>
+
+  <script type="module">
+    const params = new URLSearchParams(window.location.search);
+    const key = params.get('key') || import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+    const statusEl = document.getElementById('status-badge');
+
+    Cesium.Ion.defaultAccessToken = '';
+
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      globe: false,
+      baseLayerPicker: false,
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      navigationHelpButton: false,
+      animation: false,
+      timeline: false,
+      fullscreenButton: true,
+      infoBox: false,
+      selectionIndicator: false,
+      terrain: undefined
+    });
+
+    viewer.scene.fog.enabled = true;
+    viewer.scene.fog.density = 0.00012;
+    viewer.scene.sun.show = true;
+    viewer.scene.moon.show = false;
+
+    const LOCATIONS = {
+      congresso: {
+        dest: Cesium.Cartesian3.fromDegrees(-47.8680, -15.7997, 1260),
+        orientation: {
+          heading: Cesium.Math.toRadians(90.0), // Olhando para o Leste (Torres Gêmeas e Cúpulas)
+          pitch: Cesium.Math.toRadians(-22.0),
+          roll: 0.0
+        }
+      },
+      masp: {
+        dest: Cesium.Cartesian3.fromDegrees(-46.6578, -23.5605, 960),
+        orientation: {
+          heading: Cesium.Math.toRadians(128.0), // Olhando para o MASP e Av. Paulista
+          pitch: Cesium.Math.toRadians(-24.0),
+          roll: 0.0
+        }
+      },
+      cristo: {
+        dest: Cesium.Cartesian3.fromDegrees(-43.210487, -22.9555, 900),
+        orientation: {
+          heading: Cesium.Math.toRadians(0.0), // Olhando para o Cristo Redentor
+          pitch: Cesium.Math.toRadians(-18.0),
+          roll: 0.0
+        }
+      },
+      trianon: {
+        dest: Cesium.Cartesian3.fromDegrees(-46.6585, -23.5620, 980),
+        orientation: {
+          heading: Cesium.Math.toRadians(115.0),
+          pitch: Cesium.Math.toRadians(-28.0),
+          roll: 0.0
+        }
+      }
+    };
+
+    async function init() {
+      try {
+        statusEl.textContent = 'Conectando à API Google Photorealistic 3D Tiles...';
+        const tileset = await Cesium.Cesium3DTileset.fromUrl(
+          `https://tile.googleapis.com/v1/3dtiles/root.json?key=${key}`,
+          {
+            skipLevelOfDetail: true,
+            maximumScreenSpaceError: 16
+          }
+        );
+        viewer.scene.primitives.add(tileset);
+
+        statusEl.textContent = '✓ Google 3D Tiles conectado - Transmitindo malhas 3D e texturas contínuas';
+        setTimeout(() => { statusEl.style.opacity = '0.75'; }, 5000);
+
+        const target = params.get('target') || 'congresso';
+        flyTo(target);
+
+      } catch (err) {
+        console.error('Erro Cesium 3D Tiles:', err);
+        statusEl.style.color = '#ef4444';
+        statusEl.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        statusEl.textContent = 'Erro ao carregar Google 3D Tiles: ' + err.message;
+      }
+    }
+
+    function flyTo(locKey) {
+      const loc = LOCATIONS[locKey] || LOCATIONS.congresso;
+      viewer.camera.flyTo({
+        destination: loc.dest,
+        orientation: loc.orientation,
+        duration: 2.0
+      });
+      document.querySelectorAll('.loc-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('btn-' + locKey)?.classList.add('active');
+    }
+
+    document.getElementById('btn-congresso')?.addEventListener('click', () => flyTo('congresso'));
+    document.getElementById('btn-masp')?.addEventListener('click', () => flyTo('masp'));
+    document.getElementById('btn-cristo')?.addEventListener('click', () => flyTo('cristo'));
+    document.getElementById('btn-trianon')?.addEventListener('click', () => flyTo('trianon'));
+
+    window.flyTo = flyTo;
+    window.viewer = viewer;
+
+    init();
+  </script>
+</body>
+</html>

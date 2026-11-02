@@ -15,10 +15,16 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
-  server: {
-    hmr: {
-      clientPort: 443
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        tiny: fileURLToPath(new URL('./examples/tiny-voxels/index.html', import.meta.url)),
+        geo: fileURLToPath(new URL('./examples/geo-voxels/index.html', import.meta.url)),
+      },
     },
+  },
+  server: {
     proxy: {
       '/ws': {
         target: 'ws://localhost:3001',
