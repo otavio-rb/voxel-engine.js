@@ -17,10 +17,22 @@ export { PostProcessor, type ScreenPass } from './render/PostProcessor';
 
 export { EventEmitter, type EventCallback } from './core/EventEmitter';
 export { GameLoop, type GameLoopOptions } from './core/GameLoop';
+export { FrameProfiler, type ProfilerSnapshot, type PhaseStats } from './core/FrameProfiler';
 
-export { BlockRegistry, blockRegistry, AIR, type BlockConfig } from './blocks/BlockRegistry';
+export {
+  BlockRegistry,
+  blockRegistry,
+  AIR,
+  SURFACE_TYPE_ID,
+  type BlockConfig,
+  type BlockSurfaceType,
+  type FluidBlockConfig,
+  type FluidReactionRule,
+  type MicrovoxelBuilderContext,
+  type MicrovoxelMeshBuilder
+} from './blocks/BlockRegistry';
 
-export { default as ProceduralWorld, type ProceduralWorldOptions, type ChunkReadyEvent } from './world/ProceduralWorld';
+export { default as ProceduralWorld, type ProceduralWorldOptions, type ChunkReadyEvent, type SphereEditMode } from './world/ProceduralWorld';
 export { default as Sky } from './world/Sky';
 export type { WorldGenerator, ChunkContext } from './world/WorldGenerator';
 export { WorldGeneratorRegistry, worldGeneratorRegistry } from './world/WorldGeneratorRegistry';
@@ -48,7 +60,14 @@ export {
 export { raycastVoxel, type VoxelRaycastHit, type VoxelWorldReader } from './physics/VoxelRaycaster';
 export { default as WaterSimulator } from './physics/WaterSimulator';
 
-export { default as Player, type PlayerMode } from './player/Player';
+export {
+  default as Player,
+  type PlayerMode,
+  type PlayerOptions,
+  MOVEMENT,
+  scaleMovement,
+  type MovementTable
+} from './player/Player';
 
 export {
   VoxelParticles,

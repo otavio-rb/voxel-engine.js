@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Silkscreen:wght@400;700&family=VT323&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./src/ui/styles.css" />
+    <title>Tiny Voxels • Voxel World</title>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <div id="crosshair"></div>
+
+    <div id="play-hint" class="play-hint">
+      <div class="hint-card">
+        <div class="voxel-icon-header">❖</div>
+        <h3 class="pixel-heading">CLIQUE NA TELA PARA JOGAR</h3>
+        <p>Use o mouse para olhar e esculpir voxels.<br />Gravidade ativada por padrão, em escala de minivoxel.<br />Pressione <kbd>F</kbd> para alternar Gravidade / Voo Livre.<br />Pressione <kbd>Esc</kbd> para liberar cursor ou <kbd>E</kbd> para o Baú de Blocos.</p>
+        <button type="button" id="btn-start-game" class="hint-enter-btn">[ INICIAR JORNADA ]</button>
+      </div>
+    </div>
+
+    <div id="tiny-ui">
+      <!-- Top Header -->
+      <header class="top-bar">
+        <div class="brand-badge">
+          <span class="cube-icon">❖</span>
+          <span class="brand-title">TINY VOXELS</span>
+          <span class="tag" id="tag-resolution">-- VX/BLOCO</span>
+        </div>
+
+        <div class="top-actions">
+          <button type="button" id="btn-toggle-gravity" class="ui-btn ui-btn-gravity" title="Alternar Gravidade/Voo (F)">
+            <span class="btn-icon">🚶</span>
+            <span id="gravity-status-label">GRAVIDADE: ON [F]</span>
+          </button>
+          <div class="ui-badge" title="Altura do personagem">
+            <span class="btn-icon">📏</span>
+            <span id="tag-player-size">--</span>
+          </div>
+          <button type="button" id="btn-reset-view" class="ui-btn" title="Resetar Posição / Spawn">
+            <span class="btn-icon">⟲</span>
+            <span>SPAWN</span>
+          </button>
+          <button type="button" id="btn-open-help" class="ui-btn" title="Atalhos e Controles (H)">
+            <span class="btn-icon">⌨</span>
+            <span>AJUDA [H]</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Telemetry Float Card (Voxel F3 style) -->
+      <aside class="telemetry-card">
+        <div class="telemetry-header">
+          <span class="telemetry-title">◆ TELEMETRIA VOXEL ◆</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">POS:</span>
+          <span id="stat-pos" class="telemetry-value">0, 384, 0</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">ALVO:</span>
+          <span id="stat-target" class="telemetry-value highlight">Nenhum</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">MODO:</span>
+          <span id="stat-gravity" class="telemetry-value gravity-tag">Gravidade (1.0G)</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">PINCEL:</span>
+          <span id="stat-brush" class="telemetry-value">esfera</span>
+        </div>
+        <div class="telemetry-row">
+          <span id="perf-readout" class="telemetry-value perf">medindo...</span>
+        </div>
+      </aside>
+
+      <!-- Bottom Floating Sculpt & Hotbar Dock -->
+      <footer class="bottom-dock">
+        <!-- Sculpting Mode & Brush Toolbar -->
+        <div class="sculpt-toolbar">
+          <div class="tool-group">
+            <span class="tool-label">AÇÃO</span>
+            <button type="button" class="mode-btn active" data-mode="add" title="Construir / Adicionar Voxels">
+              <span class="mode-symbol">[+]</span> CONSTRUIR
+            </button>
+            <button type="button" class="mode-btn" data-mode="carve" title="Esculpir / Cavar Voxels">
+              <span class="mode-symbol">[-]</span> CAVAR
+            </button>
+            <button type="button" class="mode-btn" data-mode="paint" title="Pintar / Substituir Material">
+              <span class="mode-symbol">[~]</span> PINTAR
+            </button>
+          </div>
+
+          <div class="tool-group">
+            <span class="tool-label">RAIO</span>
+            <button type="button" class="brush-btn active" data-radius="0.2" title="Esfera pequena (~137 voxels)">▪ P</button>
+            <button type="button" class="brush-btn" data-radius="0.35" title="Esfera média (~735 voxels)">▰ M</button>
+            <button type="button" class="brush-btn" data-radius="0.5" title="Esfera grande (~2.100 voxels)">◼ G</button>
+            <button type="button" class="brush-btn" data-radius="0.75" title="Esfera enorme (~7.200 voxels)">⬛ XG</button>
+          </div>
+        </div>
+
+        <!-- Hotbar Palette -->
+        <div class="palette-dock">
+          <div id="hotbar-slots" class="hotbar-container"></div>
+          <button type="button" id="btn-open-palette" class="palette-btn-all" title="Ver todos os materiais (E)">
+            <span class="btn-icon">📦</span> BAÚ [E]
+          </button>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Material Library Modal (Voxel Chest) -->
+    <div id="materials-modal" class="modal-overlay">
+      <div class="modal-panel">
+        <div class="modal-header">
+          <h2 class="modal-title">❖ BAÚ DE MATERIAIS VOXEL ❖</h2>
+          <button type="button" id="modal-close-materials" class="modal-close" title="Fechar">[ ✕ ]</button>
+        </div>
+        <div class="modal-categories">
+          <button type="button" class="cat-chip active" data-cat="all">[ TODOS ]</button>
+          <button type="button" class="cat-chip" data-cat="earth">[ ROCHAS ]</button>
+          <button type="button" class="cat-chip" data-cat="nature">[ FLORA ]</button>
+          <button type="button" class="cat-chip" data-cat="architecture">[ CONSTRUÇÃO ]</button>
+          <button type="button" class="cat-chip" data-cat="crystal">[ CRISTAIS ]</button>
+        </div>
+        <div id="materials-grid" class="materials-grid"></div>
+      </div>
+    </div>
+
+    <!-- Help & Shortcuts Modal -->
+    <div id="help-modal" class="modal-overlay">
+      <div class="modal-panel help-modal-panel">
+        <div class="modal-header">
+          <h2 class="modal-title">❖ GUIA DE CONTROLES VOXEL ❖</h2>
+          <button type="button" id="modal-close-help" class="modal-close" title="Fechar">[ ✕ ]</button>
+        </div>
+        <div class="shortcut-list">
+          <div class="shortcut-item">
+            <span>Caminhar pelo Terreno</span>
+            <span class="key-badge">W, A, S, D</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Pular (com Gravidade) / Subir (Voo)</span>
+            <span class="key-badge">ESPAÇO</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Agachar / Descer no Voo</span>
+            <span class="key-badge">SHIFT</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Correr (Sprint com passo maior)</span>
+            <span class="key-badge">CTRL ou 2x W</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Alternar Gravidade ↔ Voo Livre</span>
+            <span class="key-badge">F</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Olhar / Rotação de Câmera</span>
+            <span class="key-badge">MOUSE</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Cavar / Quebrar Voxels</span>
+            <span class="key-badge">CLIQUE ESQ</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Construir / Pintar Voxels</span>
+            <span class="key-badge">CLIQUE DIR</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Selecionar Bloco da Hotbar</span>
+            <span class="key-badge">1 a 9</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Ciclar Tamanho do Pincel</span>
+            <span class="key-badge">B</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Alternar Modo (Construir / Cavar / Pintar)</span>
+            <span class="key-badge">M</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Abrir Baú de Materiais</span>
+            <span class="key-badge">E</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Abrir / Fechar este Manual</span>
+            <span class="key-badge">H</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Modo DDA Steps (Raymarch)</span>
+            <span class="key-badge">G</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

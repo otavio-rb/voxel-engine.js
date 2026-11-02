@@ -1,7 +1,8 @@
 import { SimplexNoise } from 'three/examples/jsm/Addons.js';
 import ChunkData from '../chunk/ChunkData';
 import ChunkGeometry from '../chunk/ChunkGeometry';
-import { ChunkDataResult, ChunkJobData, WorkerResponse, ChunkBorders } from '../types';
+import { ChunkDataResult, ChunkJobData, WorkerResponse, ChunkBorders, ChunkLightBorders } from '../types';
+import { blockRegistry } from '../blocks/BlockRegistry';
 import RNG from '../utils/rng';
 import { LightEngine } from '../world/LightEngine';
 
@@ -68,17 +69,32 @@ function handleJob(job: ChunkJobData): void {
         startZ:      job.startZ,
         endZ:        job.endZ,
         worldParams: job.worldParams,
+        voxelsPerBlock: job.voxelsPerBlock,
+        stride:      job.stride,
         simplex,       // ← injected, no re-creation inside ChunkData
       }).getData();
 
-  const geometry = job.buildMesh !== false 
-      ? new ChunkGeometry(chunkDataResult, job.neighbourBorderBlocks, job.light, job.neighbourBorderLight, job.neighbourBorderWaterLevels).getData() 
+  // Chunks sem nenhuma face visivel (ar puro, ou solido enterrado entre vizinhos opacos)
+  // nao recebem malha. Vale pouco no voxel classico e vale tudo em minivoxel: a maioria
+  // esmagadora dos chunks cai nesse caso, e o greedy meshing custa O(size^3 * 6) mesmo
+  // quando o resultado e vazio.
+  const uniform = uniformValue(chunkDataResult.blocks);
+  const needsMesh = job.buildMesh !== false
+    && !hasNoVisibleFaces(uniform, job.neighbourBorderBlocks, job.size);
+
+  const geometry = needsMesh
+      ? buildGeometry(chunkDataResult, job)
       : undefined;
       
   const borders = computeBorders(chunkDataResult, job.size);
   const light = !job.existingBlocks && job.computeLight
     ? getLightEngine(job.size).computeLocal(chunkDataResult.blocks, job.presumeSky ?? false)
     : undefined;
+
+  // Compartilhar so vale para ar e solido: um chunk uniforme de fluido e simulado, e
+  // simulacao escreve no array.
+  const shareable = uniform !== null && !blockRegistry.isFluid(uniform);
+  const uniformLight = light ? uniformValue(light) : null;
 
   const response: WorkerResponse = {
     chunkKey:  job.chunkKey,
@@ -87,6 +103,8 @@ function handleJob(job: ChunkJobData): void {
     opaque:    geometry?.opaque,
     water:     geometry?.water,
     light,
+    uniform:      shareable ? uniform! : undefined,
+    uniformLight: shareable && uniformLight !== null ? uniformLight : undefined,
   };
 
   // Transfer the ArrayBuffers instead of copying them (zero-copy).
@@ -129,13 +147,207 @@ function handleJob(job: ChunkJobData): void {
   (self as any).postMessage(response, transferables);
 }
 
+/** Valor unico de um volume, ou null se houver mais de um. */
+function uniformValue(arr: Int16Array | Uint8Array): number | null {
+  const first = arr[0];
+  for (let i = 1; i < arr.length; i++) {
+    if (arr[i] !== first) return null;
+  }
+  return first;
+}
+
+/**
+ * True quando o chunk nao pode produzir uma unica face: ou e ar puro, ou e um unico
+ * bloco opaco cercado por fronteiras opacas nos seis vizinhos. Um vizinho desconhecido
+ * conta como possivel face, para nunca abrir buraco no mundo.
+ */
+function hasNoVisibleFaces(uniform: number | null, borders: ChunkBorders, size: number): boolean {
+  if (uniform === null) return false;
+  const first = uniform;
+
+  if (first < 0) return true;                       // ar puro
+  if (!blockRegistry.isOpaque(first)) return false; // agua/vidro uniforme ainda rende superficie
+
+  const area = size * size;
+  const slices = [borders.negX, borders.posX, borders.negY, borders.posY, borders.negZ, borders.posZ];
+  for (const slice of slices) {
+    if (!slice || slice.length !== area) return false;
+    for (let i = 0; i < area; i++) {
+      if (!blockRegistry.isOpaque(slice[i])) return false;
+    }
+  }
+  return true;
+}
+
+function buildGeometry(data: ChunkDataResult, job: ChunkJobData) {
+  const step = job.lodStep ?? 1;
+  if (step <= 1) {
+    return new ChunkGeometry(
+      data, job.neighbourBorderBlocks, job.light, job.neighbourBorderLight, job.neighbourBorderWaterLevels,
+      job.greedyMeshing
+    ).getData();
+  }
+  return buildLodGeometry(data, job, step);
+}
+
+/**
+ * Contadores de dominancia, reaproveitados entre todas as celulas de todos os chunks.
+ * Ids de bloco cabem em 0..127 (Int16Array), e `touched` guarda quais entradas limpar,
+ * para nao zerar 128 posicoes por macro-celula.
+ */
+const DOM_COUNTS = new Int32Array(1024);
+const DOM_TOUCHED = new Int32Array(1024);
+let domTouched = 0;
+
+function domReset(): void {
+  for (let i = 0; i < domTouched; i++) DOM_COUNTS[DOM_TOUCHED[i]] = 0;
+  domTouched = 0;
+}
+
+function domAdd(id: number): void {
+  if (id < 0) return;
+  if (++DOM_COUNTS[id] === 1) DOM_TOUCHED[domTouched++] = id;
+}
+
+/**
+ * Bloco representativo do grupo acumulado: o solido mais frequente, ou ar se o grupo for
+ * todo ar. Maioria, e nao "o primeiro que achar", evita que uma folha solitaria domine uma
+ * macro-celula inteira de pedra vista de longe. Limpa os contadores ao sair.
+ */
+function domWinner(): number {
+  let best = -1;
+  let bestCount = 0;
+  for (let i = 0; i < domTouched; i++) {
+    const id = DOM_TOUCHED[i];
+    const c = DOM_COUNTS[id];
+    if (c > bestCount) { bestCount = c; best = id; }
+  }
+  domReset();
+  return best;
+}
+
+/** Reamostra um volume size^3 em macro-celulas de `step` voxels. */
+function downsampleVolume(src: Int16Array, size: number, step: number): Int16Array {
+  const m = size / step;
+  const out = new Int16Array(m * m * m);
+  const area = size * size;
+  for (let my = 0; my < m; my++) {
+    for (let mz = 0; mz < m; mz++) {
+      for (let mx = 0; mx < m; mx++) {
+        const ox = mx * step, oy = my * step, oz = mz * step;
+        for (let dy = 0; dy < step; dy++) {
+          for (let dz = 0; dz < step; dz++) {
+            const row = (oy + dy) * area + (oz + dz) * size + ox;
+            for (let dx = 0; dx < step; dx++) domAdd(src[row + dx]);
+          }
+        }
+        out[my * m * m + mz * m + mx] = domWinner();
+      }
+    }
+  }
+  return out;
+}
+
+/** Reamostra uma fatia de fronteira size^2 em macro-celulas de `step`. */
+function downsampleSlice(src: Int16Array | undefined, size: number, step: number): Int16Array | undefined {
+  if (!src) return undefined;
+  const m = size / step;
+  const out = new Int16Array(m * m);
+  for (let a = 0; a < m; a++) {
+    for (let b = 0; b < m; b++) {
+      const oa = a * step, ob = b * step;
+      for (let da = 0; da < step; da++) {
+        const row = (oa + da) * size + ob;
+        for (let db = 0; db < step; db++) domAdd(src[row + db]);
+      }
+      out[a * m + b] = domWinner();
+    }
+  }
+  return out;
+}
+
+/** Reamostra um campo escalar (luz empacotada, nivel de agua) pelo maximo do grupo. */
+function downsampleScalar(src: Uint8Array | undefined, size: number, step: number): Uint8Array | undefined {
+  if (!src) return undefined;
+  const m = size / step;
+  const out = new Uint8Array(m * m * m);
+  const area = size * size;
+  for (let my = 0; my < m; my++) {
+    for (let mz = 0; mz < m; mz++) {
+      for (let mx = 0; mx < m; mx++) {
+        let max = 0;
+        for (let dy = 0; dy < step; dy++) {
+          for (let dz = 0; dz < step; dz++) {
+            const row = (my * step + dy) * area + (mz * step + dz) * size + mx * step;
+            for (let dx = 0; dx < step; dx++) {
+              const v = src[row + dx];
+              if (v > max) max = v;
+            }
+          }
+        }
+        out[my * m * m + mz * m + mx] = max;
+      }
+    }
+  }
+  return out;
+}
+
+const SLICE_KEYS = ['negX', 'posX', 'negY', 'posY', 'negZ', 'posZ'] as const;
+
+function downsampleBorders(borders: ChunkBorders, size: number, step: number): ChunkBorders {
+  const out: ChunkBorders = {};
+  for (const key of SLICE_KEYS) out[key] = downsampleSlice(borders[key], size, step);
+  return out;
+}
+
+function downsampleLightBorders(borders: ChunkLightBorders, size: number, step: number): ChunkLightBorders {
+  const out: ChunkLightBorders = {};
+  for (const key of SLICE_KEYS) out[key] = downsampleScalar(borders[key], size, step);
+  return out;
+}
+
+/**
+ * Malha em nivel de detalhe reduzido.
+ *
+ * Em vez de uma segunda implementacao de greedy meshing, reamostra o chunk em um grid
+ * `size/step` e roda o meshing normal nele, com as coordenadas de inicio divididas por
+ * `step` (sempre inteiras, porque step divide size). Depois multiplica as posicoes de
+ * volta: uma face de 1 macro-voxel sai com `step` unidades de lado, exatamente o volume
+ * que ela representa.
+ */
+function buildLodGeometry(data: ChunkDataResult, job: ChunkJobData, step: number) {
+  const size = job.size;
+  const macro: ChunkDataResult = {
+    startX: data.startX / step, endX: data.endX / step,
+    startY: data.startY / step, endY: data.endY / step,
+    startZ: data.startZ / step, endZ: data.endZ / step,
+    blocks: downsampleVolume(data.blocks, size, step),
+    waterLevels: downsampleScalar(data.waterLevels, size, step) ?? new Uint8Array(0)
+  };
+
+  const geometry = new ChunkGeometry(
+    macro,
+    downsampleBorders(job.neighbourBorderBlocks, size, step),
+    downsampleScalar(job.light, size, step),
+    downsampleLightBorders(job.neighbourBorderLight ?? {}, size, step),
+    downsampleLightBorders(job.neighbourBorderWaterLevels ?? {}, size, step),
+    job.greedyMeshing
+  ).getData();
+
+  for (const part of [geometry.opaque, geometry.water]) {
+    const positions = part.positions;
+    for (let i = 0; i < positions.length; i++) positions[i] *= step;
+  }
+  return geometry;
+}
+
 function computeBorders(data: ChunkDataResult, size: number): ChunkBorders {
-    const negX = new Int8Array(size * size).fill(-1);
-    const posX = new Int8Array(size * size).fill(-1);
-    const negY = new Int8Array(size * size).fill(-1);
-    const posY = new Int8Array(size * size).fill(-1);
-    const negZ = new Int8Array(size * size).fill(-1);
-    const posZ = new Int8Array(size * size).fill(-1);
+    const negX = new Int16Array(size * size).fill(-1);
+    const posX = new Int16Array(size * size).fill(-1);
+    const negY = new Int16Array(size * size).fill(-1);
+    const posY = new Int16Array(size * size).fill(-1);
+    const negZ = new Int16Array(size * size).fill(-1);
+    const posZ = new Int16Array(size * size).fill(-1);
 
     for (let y = 0; y < size; y++) {
         for (let l = 0; l < size; l++) {

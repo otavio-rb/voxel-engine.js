@@ -1,7 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable",
+      "WebWorker"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -12,10 +17,23 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@voxel/engine": ["engine/index.ts"],
-      "@voxel/engine/worker": ["engine/worker.ts"],
-      "@voxel/engine/chunk-worker": ["engine/chunk-worker.ts"]
-    }
+      "@voxel/engine": [
+        "engine/index.ts"
+      ],
+      "@voxel/engine/worker": [
+        "engine/worker.ts"
+      ],
+      "@voxel/engine/chunk-worker": [
+        "engine/chunk-worker.ts"
+      ]
+    },
+    "types": [
+      "vite/client"
+    ]
   },
-  "include": ["engine", "game"]
+  "include": [
+    "engine",
+    "examples",
+    "docs"
+  ]
 }

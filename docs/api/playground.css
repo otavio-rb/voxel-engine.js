@@ -1,0 +1,823 @@
+/* Referência de API: cartões de módulo + o playground editável. */
+
+:root {
+  --api-ink: #f1f5f9;
+  --api-ink-soft: #c3ccd9;
+  --api-ink-mute: #64748b;
+  --api-line: #232c3d;
+  --api-accent: #059669;
+  --api-accent-soft: rgba(16, 185, 129, 0.14);
+  --api-code-bg: #0b1220;
+  --api-code-ink: #e2e8f0;
+  --api-mono: 'JetBrains Mono', SFMono-Regular, Consolas, monospace;
+}
+
+/* ─── Navegação lateral gerada ─────────────────────────────────────────── */
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 14px;
+}
+
+.nav-group-title {
+  font-family: var(--api-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  font-weight: 600;
+  padding: 0 8px 4px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--api-ink-soft);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  transition: background 0.12s, color 0.12s;
+}
+
+.nav-link:hover {
+  background: #1a2232;
+  color: var(--api-ink);
+}
+
+.nav-link.active {
+  background: var(--api-accent-soft);
+  color: #34d399;
+  font-weight: 600;
+  border-left-color: var(--api-accent);
+}
+
+.nav-live {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--api-accent);
+  flex: none;
+}
+
+.nav-link.filtered,
+.api-module.filtered,
+.api-group.filtered {
+  display: none;
+}
+
+/* ─── Grupos ───────────────────────────────────────────────────────────── */
+.api-group {
+  margin: 48px 0;
+}
+
+.api-group-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--api-line);
+  margin-bottom: 24px;
+}
+
+.api-group-head > .material-symbols-outlined {
+  color: var(--api-accent);
+  font-size: 22px;
+  margin-top: 2px;
+}
+
+.api-group-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--api-ink);
+}
+
+.api-group-head p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--api-ink-soft);
+  line-height: 1.55;
+}
+
+.api-group-count {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--api-mono);
+  font-size: 10px;
+  color: var(--api-ink-mute);
+  background: #10141d;
+  border: 1px solid var(--api-line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+/* ─── Cartão de módulo ─────────────────────────────────────────────────── */
+.api-module {
+  border: 1px solid var(--api-line);
+  border-radius: 14px;
+  background: #0e1420;
+  padding: 18px;
+  margin-bottom: 28px;
+  scroll-margin-top: 90px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.api-module-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.api-module-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.api-module-title h1,
+.api-module-title h3 {
+  margin: 0;
+  font-family: var(--api-mono);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--api-ink);
+}
+
+.api-module-title .kind {
+  font-family: var(--api-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #c4b5fd;
+  background: rgba(124, 58, 237, 0.16);
+  border: 1px solid rgba(124, 58, 237, 0.4);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+
+.api-module-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--api-mono);
+  font-size: 11px;
+  color: var(--api-ink-mute);
+  text-decoration: none;
+}
+
+.api-module-file:hover {
+  color: var(--api-accent);
+}
+
+.api-module-file .material-symbols-outlined {
+  font-size: 14px;
+}
+
+.api-module-summary {
+  margin: 10px 0 14px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #c3ccd9;
+}
+
+.api-module-summary code,
+.api-members code,
+.api-group-head code {
+  font-family: var(--api-mono);
+  font-size: 0.92em;
+  background: #1a2232;
+  border: 1px solid var(--api-line);
+  border-radius: 4px;
+  padding: 0 4px;
+  color: #5eead4;
+}
+
+.api-import {
+  background: var(--api-code-bg);
+  border-radius: 9px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin-bottom: 14px;
+}
+
+.api-related {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  border-radius: 9px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #c3ccd9;
+}
+
+.api-related strong {
+  color: #5eead4;
+}
+
+.api-related a {
+  color: #5eead4;
+  text-decoration: underline;
+  text-decoration-color: rgba(94, 234, 212, 0.4);
+}
+
+.api-related a:hover {
+  text-decoration-color: #5eead4;
+}
+
+.api-import code {
+  font-family: var(--api-mono);
+  font-size: 11.5px;
+  color: #7dd3fc;
+  white-space: pre;
+}
+
+/* ─── Membros (Constructor / Properties / Methods / Events) ──────────────── */
+.api-members {
+  border: 1px solid var(--api-line);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.api-member {
+  padding: 10px 14px;
+  font-size: 12px;
+}
+
+.api-member + .api-member {
+  border-top: 1px solid #1a2232;
+}
+
+.api-member-anchor {
+  display: block;
+  text-decoration: none;
+  scroll-margin-top: 80px;
+}
+
+.api-member-anchor code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #34d399;
+  font-weight: 600;
+  font-size: 12.5px;
+  word-break: break-word;
+  font-family: var(--api-mono);
+}
+
+.api-member p {
+  margin: 4px 0 0;
+  color: var(--api-ink-soft);
+  line-height: 1.6;
+}
+
+/* ─── Playground ───────────────────────────────────────────────────────── */
+.playground {
+  border: 1px solid #2e3a4e;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #10141d;
+}
+
+.playground.static {
+  border-style: dashed;
+}
+
+.pg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #0e1420;
+  border-bottom: 1px solid var(--api-line);
+  flex-wrap: wrap;
+}
+
+.pg-head-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--api-ink);
+}
+
+.pg-head-left .material-symbols-outlined {
+  font-size: 16px;
+  color: var(--api-accent);
+}
+
+.pg-edited {
+  font-family: var(--api-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.pg-edited.hidden {
+  display: none;
+}
+
+.pg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--api-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.pg-badge.live {
+  color: #34d399;
+  background: var(--api-accent-soft);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.pg-badge.live .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--api-accent);
+  animation: pg-pulse 1.8s ease-in-out infinite;
+}
+
+.pg-badge.static {
+  color: var(--api-ink-mute);
+  background: #10141d;
+  border: 1px solid var(--api-line);
+}
+
+@keyframes pg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.pg-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pg-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--api-mono);
+  font-size: 11px;
+  border-radius: 7px;
+  padding: 4px 9px;
+  border: 1px solid var(--api-line);
+  background: #0e1420;
+  color: var(--api-ink-soft);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.pg-actions button:hover {
+  background: #1a2232;
+  color: var(--api-ink);
+}
+
+.pg-actions .pg-run {
+  background: var(--api-accent);
+  border-color: var(--api-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.pg-actions .pg-run:hover {
+  background: #047857;
+  color: #fff;
+}
+
+.pg-actions .pg-run .material-symbols-outlined {
+  font-size: 14px;
+}
+
+.pg-status {
+  font-family: var(--api-mono);
+  font-size: 10.5px;
+  color: var(--api-ink-mute);
+  min-width: 56px;
+  text-align: right;
+}
+
+.pg-status.ok { color: #34d399; }
+.pg-status.error { color: #f87171; }
+.pg-status.running { color: #fcd34d; }
+
+.pg-hint {
+  margin: 0;
+  padding: 7px 12px;
+  font-size: 11.5px;
+  color: var(--api-ink-soft);
+  background: #0e1420;
+  border-bottom: 1px solid var(--api-line);
+}
+
+.pg-hint.static {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.pg-hint kbd {
+  font-family: var(--api-mono);
+  font-size: 10px;
+  background: #1a2232;
+  border: 1px solid var(--api-line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* editor: textarea transparente sobre o <pre> destacado */
+/* O textarea fica no fluxo (ele define a altura) e o <pre> destacado vai atras,
+   absoluto. Os dois usam a mesma metrica e a mesma quebra de linha, senao o texto
+   colorido descola do que o cursor esta editando. */
+.pg-code {
+  position: relative;
+  background: var(--api-code-bg);
+  overflow: hidden;
+}
+
+.pg-highlight,
+.pg-editor {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: var(--api-mono);
+  font-size: 12px;
+  line-height: 20px;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  border: 0;
+  box-sizing: border-box;
+}
+
+.pg-highlight {
+  position: absolute;
+  inset: 0;
+  color: var(--api-code-ink);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.pg-editor {
+  position: relative;
+  display: block;
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: transparent;
+  caret-color: #34d399;
+  outline: none;
+}
+
+.pg-editor::selection {
+  background: rgba(52, 211, 153, 0.28);
+}
+
+.pg-editor[readonly] {
+  caret-color: transparent;
+  cursor: default;
+}
+
+.tok-kw  { color: #c084fc; }
+.tok-str { color: #86efac; }
+.tok-num { color: #fcd34d; }
+.tok-com { color: #64748b; font-style: italic; }
+.tok-fn  { color: #7dd3fc; }
+.tok-cls { color: #fda4af; }
+.tok-pun { color: #94a3b8; }
+
+/* palco visual */
+.pg-stage {
+  background: #0b1220;
+  border-top: 1px solid #1e293b;
+  padding: 10px;
+}
+
+.pg-stage.hidden {
+  display: none;
+}
+
+.pg-canvas {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  background: #0b1220;
+  cursor: grab;
+}
+
+.pg-canvas:active {
+  cursor: grabbing;
+}
+
+/* console */
+.pg-output {
+  font-family: var(--api-mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: #cbd5e1;
+  background: #0f172a;
+  border-top: 1px solid #1e293b;
+  max-height: 300px;
+  overflow: auto;
+  padding: 0;
+}
+
+.pg-output:empty {
+  display: none;
+}
+
+.pg-line {
+  padding: 2px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pg-line:nth-child(odd) {
+  background: rgba(148, 163, 184, 0.04);
+}
+
+.pg-line.error {
+  color: #fca5a5;
+  background: rgba(220, 38, 38, 0.12);
+  border-left: 2px solid #dc2626;
+}
+
+/* ─── Painel do sandbox (topo da página) ──────────────────────────────── */
+.sandbox-note {
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.1), #0b0f17);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 22px 0 8px;
+}
+
+.sandbox-note h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #6ee7b7;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sandbox-note h2 .material-symbols-outlined {
+  font-size: 17px;
+}
+
+.sandbox-note p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #c3ccd9;
+}
+
+.sandbox-note code {
+  font-family: var(--api-mono);
+  font-size: 11px;
+  background: #0e1420;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 4px;
+  padding: 0 4px;
+  color: #34d399;
+}
+
+.sandbox-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.sandbox-scope span {
+  font-family: var(--api-mono);
+  font-size: 10.5px;
+  background: #0e1420;
+  border: 1px solid var(--api-line);
+  border-radius: 6px;
+  padding: 2px 6px;
+  color: var(--api-ink-soft);
+}
+
+@media (max-width: 640px) {
+  .api-module { padding: 14px 12px; }
+  .pg-head { align-items: flex-start; }
+}
+
+
+/* ─── HUD do palco ─────────────────────────────────────────────────────── */
+.pg-hud {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #1e293b;
+  color: #cbd5e1;
+  font-family: var(--api-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  min-height: 1.6em;
+}
+
+.pg-hud:empty {
+  display: none;
+}
+
+.pg-stage.locked .pg-canvas {
+  cursor: none;
+  outline: 2px solid var(--api-accent);
+  outline-offset: -2px;
+}
+
+.pg-hint.note {
+  background: rgba(56, 189, 248, 0.12);
+  color: #93c5fd;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.pg-hint.note b { font-weight: 600; }
+
+.pg-actions .pg-stop {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
+}
+
+.pg-actions .pg-stop.hidden {
+  display: none;
+}
+
+/* ─── Título de seção da página de módulo ─────────────────────────────── */
+.api-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--api-ink-mute);
+  margin: 26px 0 10px;
+}
+
+/* ─── Página de módulo: cabeçalho sem cartão ──────────────────────────── */
+#api-module > .api-module-head {
+  margin-bottom: 4px;
+}
+
+#api-module .api-module-summary {
+  font-size: 14px;
+  margin: 12px 0 16px;
+}
+
+/* ─── Paginação entre módulos ─────────────────────────────────────────── */
+.api-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--api-line);
+}
+
+.api-pager-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--api-line);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--api-ink);
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.api-pager-link:hover {
+  border-color: var(--api-accent);
+  background: var(--api-accent-soft);
+}
+
+.api-pager-link.hidden {
+  visibility: hidden;
+}
+
+.api-pager-link.next {
+  margin-left: auto;
+  text-align: right;
+}
+
+.api-pager-link small {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--api-ink-mute);
+}
+
+.api-pager-link .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--api-accent);
+}
+
+/* ─── Índice ───────────────────────────────────────────────────────────── */
+.index-group {
+  margin-bottom: 40px;
+}
+
+.index-group.filtered,
+.index-card.filtered {
+  display: none;
+}
+
+.index-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.index-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--api-line);
+  border-radius: 12px;
+  background: #0e1420;
+  text-decoration: none;
+  transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+}
+
+.index-card:hover {
+  border-color: var(--api-accent);
+  box-shadow: 0 6px 18px rgba(5, 150, 105, 0.1);
+  transform: translateY(-1px);
+}
+
+.index-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.index-card-name {
+  font-family: var(--api-mono);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--api-ink);
+}
+
+.index-card-demo {
+  font-size: 10px;
+  color: #34d399;
+  background: var(--api-accent-soft);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 48%;
+}
+
+.index-card-summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--api-ink-soft);
+}
+
+.index-card-file {
+  font-family: var(--api-mono);
+  font-size: 10.5px;
+  color: var(--api-ink-mute);
+}

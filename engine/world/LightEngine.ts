@@ -9,11 +9,18 @@ export const MAX_LIGHT = 15;
 
 /** Chunk as seen by the light engine. Light is packed per cell: sky in the high nibble, block in the low. */
 export interface LightChunk {
-  data: { blocks: Int8Array };
+  data: { blocks: Int16Array };
   light: Uint8Array;
   neighbors: Array<LightChunk | null>;
   /** Top was lit as open sky because nothing was loaded above. */
   assumedSky?: boolean;
+  /**
+   * Chamado antes de qualquer escrita em `light`. Existe para quem compartilha o array de
+   * luz entre chunks uniformes: o dono troca `light` por uma copia privada aqui, e a
+   * escrita seguinte nao vaza para os outros chunks. `setLevel` e o unico escritor, entao
+   * este e o unico ponto que precisa do gancho.
+   */
+  beforeLightWrite?: () => void;
 }
 
 const SKY = 0;
@@ -76,7 +83,29 @@ export class LightEngine {
    * Lights one chunk on its own: block light from its emitters and sky light entering
    * from the top when `openSkyAbove`. Cheap to run in a worker, right after generation.
    */
-  public computeLocal(blocks: Int8Array, openSkyAbove: boolean): Uint8Array {
+  /**
+   * True quando o volume inteiro e ar (o sentinela -1), com saida antecipada.
+   *
+   * Vale a varredura: num mundo de minivoxels a maior parte dos chunks carregados e ceu puro,
+   * e para eles a luz e constante. Inundar 32 mil celulas vazias para descobrir isso custava
+   * ~2.5 ms por chunk; a varredura custa ~0.02 ms.
+   */
+  private isAllAir(blocks: Int16Array): boolean {
+    for (let i = 0; i < blocks.length; i++) {
+      if (blocks[i] !== -1) return false;
+    }
+    return true;
+  }
+
+  public computeLocal(blocks: Int16Array, openSkyAbove: boolean): Uint8Array {
+    // Ar puro: sem opacidade e sem emissao em celula nenhuma, logo o resultado e o valor do
+    // ceu em tudo (ou zero, se nao ha ceu aberto acima). Nao ha o que inundar.
+    if (this.isAllAir(blocks)) {
+      const uniform = this.createLightArray();
+      if (openSkyAbove) uniform.fill(MAX_LIGHT << 4);
+      return uniform;
+    }
+
     const light = this.createLightArray();
     const chunk: LightChunk = { data: { blocks }, light, neighbors: [null, null, null, null, null, null] };
     const S = this.size, A = this.area;
@@ -357,6 +386,7 @@ export class LightEngine {
   }
 
   private setLevel(chunk: LightChunk, index: number, channel: Channel, level: number): void {
+    chunk.beforeLightWrite?.();
     const v = chunk.light[index];
     chunk.light[index] = channel === SKY ? (level << 4) | (v & 0x0f) : (v & 0xf0) | level;
     if (this.trackDirty) this.markDirty(chunk, index);
@@ -432,7 +462,7 @@ export class LightEngine {
   }
 
   /** True if sunlight crosses the whole column without being filtered. */
-  private isClearColumn(blocks: Int8Array, column: number): boolean {
+  private isClearColumn(blocks: Int16Array, column: number): boolean {
     for (let i = column; i < blocks.length; i += this.area) {
       if (this.opacity[blocks[i] & 0xff] !== 0) return false;
     }
@@ -440,7 +470,7 @@ export class LightEngine {
   }
 
   /** True if a horizontal neighbor inside the chunk could receive light from this sky cell. */
-  private hasDimmerSideNeighbor(blocks: Int8Array, light: Uint8Array, index: number, x: number, z: number): boolean {
+  private hasDimmerSideNeighbor(blocks: Int16Array, light: Uint8Array, index: number, x: number, z: number): boolean {
     const S = this.size;
     if (x === 0 || x === S - 1 || z === 0 || z === S - 1) return true;
     const op = this.opacity;

@@ -39,11 +39,15 @@ export interface KinematicBodyOptions {
   gravity?: number;
   friction?: number;
   eyeHeight?: number;
+  /** Maximum obstacle height (in world units) the body can step up automatically when grounded. Default 0. */
+  stepHeight?: number;
+  /** Unidades de mundo por bloco. Escala as granularidades internas do resolvedor. */
+  unitScale?: number;
 }
 
 /**
  * Resolvedor de física e colisão de AABB (Axis-Aligned Bounding Box) em grids voxel.
- * Executa resolução eixo a eixo (X, Y, Z) para evitar tunneling em esquinas.
+ * Executa resolução eixo a eixo (Y, X, Z) por varredura volumétrica para evitar tunneling.
  */
 export class KinematicBody {
   public readonly position = new Vector3();
@@ -52,6 +56,8 @@ export class KinematicBody {
   public gravity: number;
   public friction: number;
   public eyeHeight: number;
+  public stepHeight: number;
+  public readonly unitScale: number;
   public isGrounded = false;
 
   constructor(options: KinematicBodyOptions) {
@@ -59,47 +65,19 @@ export class KinematicBody {
     this.gravity = options.gravity ?? 0.008;
     this.friction = options.friction ?? 0.9;
     this.eyeHeight = options.eyeHeight ?? 0;
+    this.stepHeight = options.stepHeight ?? 0;
+    this.unitScale = options.unitScale ?? 1;
   }
 
   /**
    * Checa se o volume AABB colide com algum bloco sólido na posição especificada.
    */
   public checkCollisionAt(pos: Vector3, world: VoxelColliderWorld): boolean {
-    const w = this.dimensions.width / 2;
-    const d = (this.dimensions.depth ?? this.dimensions.width) / 2;
-    const h = this.dimensions.height;
-    const baseY = pos.y - this.eyeHeight;
-
-    const points = [
-      // Base / Pés
-      { x: pos.x - w, y: baseY, z: pos.z - d },
-      { x: pos.x + w, y: baseY, z: pos.z - d },
-      { x: pos.x - w, y: baseY, z: pos.z + d },
-      { x: pos.x + w, y: baseY, z: pos.z + d },
-
-      // Nível Médio
-      { x: pos.x - w, y: baseY + h * 0.5, z: pos.z - d },
-      { x: pos.x + w, y: baseY + h * 0.5, z: pos.z - d },
-      { x: pos.x - w, y: baseY + h * 0.5, z: pos.z + d },
-      { x: pos.x + w, y: baseY + h * 0.5, z: pos.z + d },
-
-      // Topo / Cabeça
-      { x: pos.x - w, y: baseY + h, z: pos.z - d },
-      { x: pos.x + w, y: baseY + h, z: pos.z - d },
-      { x: pos.x - w, y: baseY + h, z: pos.z + d },
-      { x: pos.x + w, y: baseY + h, z: pos.z + d },
-    ];
-
-    for (const p of points) {
-      if (world.isBlockSolid(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))) {
-        return true;
-      }
-    }
-    return false;
+    return KinematicBody.intersectsSolid(world, this.getBounds(pos));
   }
 
   /**
-   * Atualiza a física de movimento, gravidade e colisão eixo por eixo.
+   * Atualiza a física de movimento, gravidade e colisão eixo por eixo usando `moveAndCollide`.
    */
   public stepPhysics(
     world: VoxelColliderWorld,
@@ -111,39 +89,26 @@ export class KinematicBody {
       this.velocity.y -= this.gravity * dtScale;
     }
 
-    const nextPos = this.position.clone();
+    const result = this.moveAndCollide(
+      world,
+      this.velocity.x * dtScale,
+      this.velocity.y * dtScale,
+      this.velocity.z * dtScale,
+      false
+    );
 
-    // 1. Resolução Eixo X
-    nextPos.x += this.velocity.x;
-    if (this.checkCollisionAt(nextPos, world)) {
-      nextPos.x = this.position.x;
+    if (result.collidedX) {
       this.velocity.x = 0;
       onCollision?.('x');
     }
-    this.position.x = nextPos.x;
-
-    // 2. Resolução Eixo Y
-    nextPos.y += this.velocity.y * dtScale;
-    if (this.checkCollisionAt(nextPos, world)) {
-      if (this.velocity.y < 0) {
-        this.isGrounded = true;
-      }
-      nextPos.y = this.position.y;
+    if (result.collidedY) {
       this.velocity.y = 0;
       onCollision?.('y');
-    } else {
-      this.isGrounded = false;
     }
-    this.position.y = nextPos.y;
-
-    // 3. Resolução Eixo Z
-    nextPos.z += this.velocity.z;
-    if (this.checkCollisionAt(nextPos, world)) {
-      nextPos.z = this.position.z;
+    if (result.collidedZ) {
       this.velocity.z = 0;
       onCollision?.('z');
     }
-    this.position.z = nextPos.z;
 
     // Aplica atrito horizontal
     const frictionFactor = Math.pow(this.friction, dtScale);
@@ -176,8 +141,9 @@ export class KinematicBody {
 
   /**
    * Moves the body by (dx, dy, dz), clipping each axis against solid blocks so it ends
-   * flush with what it hits (Y first, then X, then Z — same order as Minecraft's
-   * `Entity.moveEntity`). With `sneakEdge`, a grounded body won't walk off ledges.
+   * flush with what it hits (Y first, then X, then Z).
+   * With `sneakEdge`, a grounded body won't walk off ledges.
+   * When `stepHeight > 0` and grounded, automatically climbs obstacles up to `stepHeight`.
    */
   public moveAndCollide(
     world: VoxelColliderWorld,
@@ -186,11 +152,71 @@ export class KinematicBody {
     dz: number,
     sneakEdge = false
   ): MoveResult {
+    const wasGrounded = this.isGrounded;
+    const startX = this.position.x;
+    const startY = this.position.y;
+    const startZ = this.position.z;
+
+    const flatResult = this.sweepAxes(world, dx, dy, dz, sneakEdge);
+
+    if (
+      this.stepHeight > 0 &&
+      wasGrounded &&
+      !sneakEdge &&
+      (flatResult.collidedX || flatResult.collidedZ) &&
+      (dx !== 0 || dz !== 0)
+    ) {
+      const flatDistSq = flatResult.x * flatResult.x + flatResult.z * flatResult.z;
+      const flatEndX = this.position.x;
+      const flatEndY = this.position.y;
+      const flatEndZ = this.position.z;
+      const flatGrounded = this.isGrounded;
+
+      // Restore start pose to test stepping over obstacle
+      this.position.set(startX, startY, startZ);
+      this.isGrounded = wasGrounded;
+
+      const upResult = this.sweepAxes(world, 0, this.stepHeight, 0, false);
+      const actualUp = upResult.y;
+
+      if (actualUp > 0.05) {
+        const horizResult = this.sweepAxes(world, dx, 0, dz, false);
+        const downResult = this.sweepAxes(world, 0, -actualUp + dy, 0, false);
+        const steppedDistSq = horizResult.x * horizResult.x + horizResult.z * horizResult.z;
+
+        if (steppedDistSq > flatDistSq + 0.001) {
+          return {
+            x: horizResult.x,
+            y: actualUp + downResult.y,
+            z: horizResult.z,
+            collidedX: horizResult.collidedX,
+            collidedY: downResult.collidedY,
+            collidedZ: horizResult.collidedZ,
+            onGround: downResult.onGround
+          };
+        }
+      }
+
+      // Obstacle too high: keep original flat move
+      this.position.set(flatEndX, flatEndY, flatEndZ);
+      this.isGrounded = flatGrounded;
+    }
+
+    return flatResult;
+  }
+
+  private sweepAxes(
+    world: VoxelColliderWorld,
+    dx: number,
+    dy: number,
+    dz: number,
+    sneakEdge: boolean
+  ): MoveResult {
     const box = this.getBounds();
     const reqY = dy;
 
     if (sneakEdge && this.isGrounded) {
-      const step = 0.05;
+      const step = 0.05 * this.unitScale;
       const hasGround = (ox: number, oz: number) =>
         KinematicBody.intersectsSolid(world, offset(box, ox, -1, oz));
       while (dx !== 0 && !hasGround(dx, 0)) {

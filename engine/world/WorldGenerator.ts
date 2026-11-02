@@ -9,10 +9,20 @@ export interface ChunkContext {
   readonly endY: number;
   readonly startZ: number;
   readonly endZ: number;
-  readonly blocks: Int8Array;
+  readonly blocks: Int16Array;
   readonly waterLevels: Uint8Array;
   readonly worldParams: WorldParams;
   readonly simplex: SimplexNoise;
+  /**
+   * Voxels por bloco deste mundo (1 = voxel classico, 8 = minivoxel de 1/8 de bloco).
+   * Escreva o relevo em blocos e multiplique por este fator: o mesmo gerador serve
+   * qualquer resolucao, e as frequencias de ruido nao precisam ser redescobertas na mao.
+   */
+  readonly voxelsPerBlock: number;
+  /**
+   * Quantos voxels de MUNDO cada celula deste chunk representa. 1 = resolucao cheia.
+   */
+  readonly stride: number;
 
   setBlock(x: number, y: number, z: number, type: number): void;
   getBlock(x: number, y: number, z: number): number;

@@ -16,6 +16,9 @@ interface ChunkDataParams {
   endZ: number;
   worldParams: WorldParams;
   simplex?: SimplexNoise;
+  voxelsPerBlock?: number;
+  /** Voxels de mundo por celula. Ver ChunkContext.stride. */
+  stride?: number;
 }
 
 export default class ChunkData implements ChunkContext {
@@ -28,11 +31,15 @@ export default class ChunkData implements ChunkContext {
   readonly endZ: number;
   readonly worldParams: WorldParams;
   readonly simplex: SimplexNoise;
+  readonly voxelsPerBlock: number;
+  readonly stride: number;
 
-  readonly blocks: Int8Array;
+  readonly blocks: Int16Array;
   readonly waterLevels: Uint8Array;
 
-  constructor({ size, startX, endX, startY, endY, startZ, endZ, worldParams, simplex }: ChunkDataParams) {
+  constructor({ size, startX, endX, startY, endY, startZ, endZ, worldParams, simplex, voxelsPerBlock, stride }: ChunkDataParams) {
+    this.voxelsPerBlock = voxelsPerBlock ?? 1;
+    this.stride = stride ?? 1;
     this.size = size;
     this.startX = startX;
     this.endX = endX;
@@ -44,7 +51,7 @@ export default class ChunkData implements ChunkContext {
 
     this.simplex = simplex ?? new SimplexNoise(new RNG(worldParams.seed));
 
-    this.blocks = new Int8Array(size * size * size).fill(-1);
+    this.blocks = new Int16Array(size * size * size).fill(-1);
     this.waterLevels = new Uint8Array(size * size * size).fill(0);
 
     this.generate();
@@ -52,7 +59,11 @@ export default class ChunkData implements ChunkContext {
 
   public idx(x: number, y: number, z: number): number {
     if (y < this.startY || y >= this.endY || x < this.startX || x >= this.endX || z < this.startZ || z >= this.endZ) return -1;
-    return (y - this.startY) * this.size * this.size + (z - this.startZ) * this.size + (x - this.startX);
+    const k = this.stride;
+    const lx = ((x - this.startX) / k) | 0;
+    const ly = ((y - this.startY) / k) | 0;
+    const lz = ((z - this.startZ) / k) | 0;
+    return (ly * this.size + lz) * this.size + lx;
   }
 
   public setBlock(x: number, y: number, z: number, type: number): void {

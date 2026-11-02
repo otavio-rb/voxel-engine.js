@@ -1,0 +1,914 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Silkscreen:wght@400;700&family=VT323&display=swap');
+
+:root {
+  /* Voxel Palette */
+  --stone-darkest: #0e1015;
+  --stone-dark: #191c24;
+  --stone-base: #262a36;
+  --stone-light: #3a4052;
+  --stone-bevel-light: #5f687e;
+  --stone-bevel-dark: #12141a;
+
+  --voxel-gold: #f59e0b;
+  --voxel-gold-bright: #fbbf24;
+  --voxel-emerald: #10b981;
+  --voxel-emerald-bright: #34d399;
+  --voxel-diamond: #06b6d4;
+  --voxel-diamond-bright: #38bdf8;
+  --voxel-ruby: #ef4444;
+  --voxel-ruby-bright: #f87171;
+  --voxel-amethyst: #a855f7;
+
+  --text-main: #f3f4f6;
+  --text-muted: #9ca3af;
+  --text-pixel-shadow: 2px 2px 0px #000000;
+
+  --font-pixel-heading: 'Press Start 2P', monospace;
+  --font-pixel-sub: 'Silkscreen', monospace;
+  --font-pixel-body: 'VT323', monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+  image-rendering: pixelated;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--stone-darkest);
+  font-family: var(--font-pixel-body);
+  color: var(--text-main);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+#scene {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 1;
+}
+
+/* ── Crosshair (Voxel Style) ── */
+#crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+#crosshair::before,
+#crosshair::after {
+  content: '';
+  position: absolute;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px #000000, 0 0 4px rgba(0, 0, 0, 0.7);
+}
+
+/* Horizontal arm */
+#crosshair::before {
+  top: 7px;
+  left: 0;
+  width: 16px;
+  height: 2px;
+}
+
+/* Vertical arm */
+#crosshair::after {
+  top: 0;
+  left: 7px;
+  width: 2px;
+  height: 16px;
+}
+
+/* ── Interface Container ── */
+#tiny-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 16px;
+}
+
+/* ── Voxel 3D Bevel Utilities ── */
+.voxel-panel {
+  background: var(--stone-base);
+  border: 3px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark),
+    0 4px 10px rgba(0, 0, 0, 0.6);
+}
+
+.voxel-inset {
+  background: var(--stone-dark);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-dark),
+    inset -1px -1px 0px var(--stone-bevel-light);
+}
+
+/* ── Top Header Bar ── */
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: auto;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.brand-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--stone-base);
+  border: 3px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark),
+    0 4px 12px rgba(0, 0, 0, 0.5);
+  padding: 6px 14px;
+}
+
+.cube-icon {
+  color: var(--voxel-gold-bright);
+  font-size: 1.2rem;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+.brand-title {
+  font-family: var(--font-pixel-heading);
+  font-size: 0.85rem;
+  color: #ffffff;
+  letter-spacing: 1px;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+.tag {
+  font-family: var(--font-pixel-sub);
+  font-size: 0.65rem;
+  background: var(--stone-dark);
+  color: var(--voxel-diamond-bright);
+  padding: 3px 6px;
+  border: 1px solid var(--stone-darkest);
+  box-shadow: inset 1px 1px 0px var(--stone-bevel-dark);
+  letter-spacing: 0.5px;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Voxel Buttons ── */
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--stone-base);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark),
+    0 3px 6px rgba(0, 0, 0, 0.4);
+  color: var(--text-main);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.72rem;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-shadow: var(--text-pixel-shadow);
+  transition: transform 0.05s ease;
+}
+
+.ui-btn:hover {
+  background: var(--stone-light);
+  color: #ffffff;
+}
+
+.ui-btn:active {
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-dark),
+    inset -1px -1px 0px var(--stone-bevel-light);
+  transform: translate(1px, 1px);
+}
+
+/* Gravity Toggle Button Specifics */
+.ui-btn-gravity {
+  border-color: #064e3b;
+  background: #065f46;
+  color: var(--voxel-emerald-bright);
+}
+
+.ui-btn-gravity:hover {
+  background: #047857;
+}
+
+.ui-btn-gravity.fly-mode {
+  border-color: #78350f;
+  background: #92400e;
+  color: var(--voxel-gold-bright);
+}
+
+.ui-btn-gravity.fly-mode:hover {
+  background: #b45309;
+}
+
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--stone-dark);
+  border: 2px solid var(--stone-darkest);
+  box-shadow: inset 1px 1px 0px var(--stone-bevel-dark);
+  color: var(--voxel-diamond-bright);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.68rem;
+  padding: 8px 10px;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+/* ── Telemetry Card (Voxel F3 Debug Plate) ── */
+.telemetry-card {
+  align-self: flex-start;
+  background: rgba(25, 28, 36, 0.94);
+  border: 3px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark),
+    0 4px 16px rgba(0, 0, 0, 0.7);
+  padding: 10px 14px;
+  min-width: 250px;
+  max-width: 320px;
+  pointer-events: auto;
+  margin-top: 10px;
+}
+
+.telemetry-header {
+  border-bottom: 2px solid var(--stone-darkest);
+  padding-bottom: 4px;
+  margin-bottom: 6px;
+}
+
+.telemetry-title {
+  font-family: var(--font-pixel-sub);
+  font-size: 0.68rem;
+  color: var(--voxel-gold-bright);
+  text-shadow: var(--text-pixel-shadow);
+  letter-spacing: 0.5px;
+}
+
+.telemetry-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 1.05rem;
+  line-height: 1.35;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+  padding: 2px 0;
+}
+
+.telemetry-row:last-child {
+  border-bottom: none;
+}
+
+.telemetry-label {
+  color: var(--text-muted);
+  font-weight: bold;
+}
+
+.telemetry-value {
+  color: #ffffff;
+  font-family: var(--font-pixel-body);
+  font-size: 1.15rem;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+.telemetry-value.highlight {
+  color: var(--voxel-diamond-bright);
+}
+
+.telemetry-value.gravity-tag {
+  color: var(--voxel-emerald-bright);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.65rem;
+  background: #064e3b;
+  padding: 2px 6px;
+  border: 1px solid var(--stone-darkest);
+}
+
+.telemetry-value.gravity-tag.fly {
+  color: var(--voxel-gold-bright);
+  background: #78350f;
+}
+
+.telemetry-value.perf {
+  font-size: 0.95rem;
+  color: #a3e635;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.telemetry-value.perf.bad {
+  color: var(--voxel-ruby-bright);
+}
+
+/* ── Bottom Floating Dock ── */
+.bottom-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+  margin-bottom: 4px;
+}
+
+/* ── Sculpt Toolbar ── */
+.sculpt-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--stone-base);
+  border: 3px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark),
+    0 6px 20px rgba(0, 0, 0, 0.6);
+  padding: 6px 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.tool-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-label {
+  font-family: var(--font-pixel-sub);
+  font-size: 0.65rem;
+  color: var(--voxel-gold-bright);
+  margin-right: 4px;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+.mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--stone-dark);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark);
+  color: var(--text-main);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.68rem;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-shadow: var(--text-pixel-shadow);
+  transition: all 0.05s ease;
+}
+
+.mode-btn:hover {
+  background: var(--stone-light);
+  color: #ffffff;
+}
+
+.mode-btn.active {
+  background: #1e3a5f;
+  border-color: var(--stone-darkest);
+  color: var(--voxel-diamond-bright);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-dark),
+    inset -1px -1px 0px var(--stone-bevel-light),
+    0 0 8px rgba(6, 182, 212, 0.5);
+}
+
+.mode-symbol {
+  font-family: var(--font-pixel-heading);
+  font-size: 0.6rem;
+  color: var(--voxel-gold-bright);
+}
+
+.brush-btn {
+  background: var(--stone-dark);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark);
+  color: var(--text-main);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.68rem;
+  padding: 6px 8px;
+  min-width: 44px;
+  text-align: center;
+  cursor: pointer;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+.brush-btn:hover {
+  background: var(--stone-light);
+}
+
+.brush-btn.active {
+  background: #3b284c;
+  color: #e9d5ff;
+  border-color: var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-dark),
+    inset -1px -1px 0px var(--stone-bevel-light),
+    0 0 8px rgba(168, 85, 247, 0.5);
+}
+
+/* ── Hotbar Palette Dock ── */
+.palette-dock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hotbar-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--stone-darkest);
+  border: 4px solid #141720;
+  box-shadow:
+    inset 2px 2px 0px #0a0b10,
+    inset -2px -2px 0px var(--stone-bevel-light),
+    0 8px 24px rgba(0, 0, 0, 0.7);
+  padding: 6px;
+}
+
+/* Each hotbar slot is a 3D sunken voxel tile */
+.palette-slot {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  background: var(--stone-base);
+  border: 3px solid var(--stone-darkest);
+  box-shadow:
+    inset 3px 3px 0px var(--stone-bevel-dark),
+    inset -2px -2px 0px var(--stone-bevel-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.08s ease;
+}
+
+.palette-slot:hover {
+  background: var(--stone-light);
+}
+
+/* Active Slot: Voxel Golden Selection Frame */
+.palette-slot.active {
+  border: 3px solid var(--voxel-gold-bright);
+  box-shadow:
+    inset 2px 2px 0px #fef08a,
+    inset -2px -2px 0px #b45309,
+    0 0 12px rgba(251, 191, 36, 0.75);
+  transform: translateY(-4px) scale(1.06);
+  z-index: 5;
+}
+
+.palette-slot.active::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border: 2px dashed rgba(251, 191, 36, 0.85);
+  pointer-events: none;
+}
+
+.slot-cube-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.slot-cube-wrap .voxel-cube-svg {
+  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, 0.6));
+  transition: transform 0.1s ease;
+}
+
+.palette-slot:hover .slot-cube-wrap .voxel-cube-svg {
+  transform: scale(1.12) translateY(-2px);
+}
+
+.slot-num {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  font-family: var(--font-pixel-heading);
+  font-size: 0.55rem;
+  color: var(--voxel-gold-bright);
+  text-shadow: 1px 1px 0px #000000;
+  pointer-events: none;
+}
+
+.palette-btn-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--stone-base);
+  border: 3px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark),
+    0 4px 12px rgba(0, 0, 0, 0.5);
+  color: var(--text-main);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.75rem;
+  padding: 14px 14px;
+  height: 66px;
+  cursor: pointer;
+  text-shadow: var(--text-pixel-shadow);
+  transition: all 0.08s ease;
+}
+
+.palette-btn-all:hover {
+  background: var(--stone-light);
+  color: #ffffff;
+}
+
+.palette-btn-all:active {
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-dark),
+    inset -1px -1px 0px var(--stone-bevel-light);
+  transform: translate(1px, 1px);
+}
+
+/* ── Play Hint (Voxel Quest Card) ── */
+.play-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(14, 16, 21, 0.75);
+  z-index: 30;
+  backdrop-filter: blur(4px);
+}
+
+.hint-card {
+  background: var(--stone-base);
+  border: 4px solid var(--stone-darkest);
+  box-shadow:
+    inset 3px 3px 0px var(--stone-bevel-light),
+    inset -3px -3px 0px var(--stone-bevel-dark),
+    0 12px 36px rgba(0, 0, 0, 0.85);
+  padding: 28px 36px;
+  text-align: center;
+  max-width: 480px;
+}
+
+.voxel-icon-header {
+  font-size: 2.5rem;
+  color: var(--voxel-gold-bright);
+  text-shadow: var(--text-pixel-shadow);
+  margin-bottom: 12px;
+}
+
+.pixel-heading {
+  font-family: var(--font-pixel-heading);
+  font-size: 0.95rem;
+  color: #ffffff;
+  margin-bottom: 14px;
+  line-height: 1.5;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+.hint-card p {
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.hint-card kbd {
+  display: inline-block;
+  background: var(--stone-dark);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 1px 1px 0px var(--stone-bevel-light),
+    inset -1px -1px 0px var(--stone-bevel-dark);
+  color: var(--voxel-gold-bright);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  margin: 0 2px;
+}
+
+.play-hint {
+  cursor: pointer;
+}
+
+.hint-card {
+  cursor: default;
+}
+
+.hint-enter-btn {
+  display: inline-block;
+  background: #065f46;
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark),
+    0 4px 10px rgba(0, 0, 0, 0.4);
+  color: var(--voxel-emerald-bright);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.85rem;
+  padding: 12px 24px;
+  text-shadow: var(--text-pixel-shadow);
+  cursor: pointer;
+  transition: all 0.08s ease;
+}
+
+.hint-enter-btn:hover {
+  background: #047857;
+  color: #ffffff;
+  transform: translateY(-2px);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark),
+    0 6px 14px rgba(0, 0, 0, 0.6);
+}
+
+.hint-enter-btn:active {
+  transform: translate(1px, 1px);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-dark),
+    inset -1px -1px 0px var(--stone-bevel-light);
+}
+
+/* ── Modals (Voxel Chest / Workbench) ── */
+.modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(14, 16, 21, 0.8);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  backdrop-filter: blur(2px);
+}
+
+.modal-overlay.open {
+  display: flex;
+}
+
+.modal-panel {
+  background: var(--stone-base);
+  border: 4px solid var(--stone-darkest);
+  box-shadow:
+    inset 4px 4px 0px var(--stone-bevel-light),
+    inset -4px -4px 0px var(--stone-bevel-dark),
+    0 16px 40px rgba(0, 0, 0, 0.9);
+  width: 90%;
+  max-width: 680px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 24px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 3px solid var(--stone-darkest);
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.modal-title {
+  font-family: var(--font-pixel-heading);
+  font-size: 0.85rem;
+  color: var(--voxel-gold-bright);
+  text-shadow: var(--text-pixel-shadow);
+  letter-spacing: 0.5px;
+}
+
+.modal-close {
+  background: var(--voxel-ruby);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--voxel-ruby-bright),
+    inset -2px -2px 0px #7f1d1d;
+  color: #ffffff;
+  font-family: var(--font-pixel-sub);
+  font-size: 0.75rem;
+  padding: 6px 12px;
+  cursor: pointer;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+.modal-close:hover {
+  background: #dc2626;
+}
+
+/* Category filter tabs */
+.modal-categories {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.cat-chip {
+  background: var(--stone-dark);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark);
+  color: var(--text-muted);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.65rem;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+.cat-chip:hover {
+  color: #ffffff;
+  background: var(--stone-light);
+}
+
+.cat-chip.active {
+  background: var(--voxel-gold);
+  color: #ffffff;
+  border-color: var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--voxel-gold-bright),
+    inset -2px -2px 0px #78350f;
+}
+
+/* Materials grid */
+.materials-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 6px;
+  max-height: 55vh;
+}
+
+/* Custom voxel scrollbar */
+.materials-grid::-webkit-scrollbar {
+  width: 10px;
+}
+
+.materials-grid::-webkit-scrollbar-track {
+  background: var(--stone-darkest);
+  border: 1px solid var(--stone-bevel-dark);
+}
+
+.materials-grid::-webkit-scrollbar-thumb {
+  background: var(--stone-bevel-light);
+  border: 2px solid var(--stone-darkest);
+}
+
+.material-card {
+  background: var(--stone-dark);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-dark),
+    inset -1px -1px 0px var(--stone-bevel-light);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.08s ease;
+}
+
+.material-card:hover {
+  background: var(--stone-light);
+  border-color: var(--voxel-gold-bright);
+  transform: translateY(-2px);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.5),
+    inset 1px 1px 0px var(--voxel-gold-bright);
+}
+
+.material-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 52px;
+}
+
+.material-preview .voxel-cube-svg {
+  filter: drop-shadow(0 3px 3px rgba(0, 0, 0, 0.6));
+}
+
+.material-name {
+  font-family: var(--font-pixel-body);
+  font-size: 1.15rem;
+  color: #ffffff;
+  text-align: center;
+  text-shadow: var(--text-pixel-shadow);
+  word-break: break-word;
+}
+
+/* Help Modal Shortcut List */
+.help-modal-panel {
+  max-width: 580px;
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  max-height: 55vh;
+  padding-right: 6px;
+}
+
+.shortcut-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--stone-dark);
+  border: 1px solid var(--stone-darkest);
+  box-shadow: inset 1px 1px 0px var(--stone-bevel-dark);
+  font-size: 1.15rem;
+}
+
+.key-badge {
+  background: var(--stone-base);
+  border: 2px solid var(--stone-darkest);
+  box-shadow:
+    inset 2px 2px 0px var(--stone-bevel-light),
+    inset -2px -2px 0px var(--stone-bevel-dark);
+  color: var(--voxel-gold-bright);
+  font-family: var(--font-pixel-sub);
+  font-size: 0.68rem;
+  padding: 4px 8px;
+  text-shadow: var(--text-pixel-shadow);
+}
+
+/* ── Mobile & Responsive Tweaks ── */
+@media (max-width: 768px) {
+  #tiny-ui {
+    padding: 10px;
+  }
+
+  .top-bar {
+    gap: 6px;
+  }
+
+  .brand-title {
+    font-size: 0.7rem;
+  }
+
+  .palette-slot {
+    width: 44px;
+    height: 44px;
+  }
+
+  .palette-slot .voxel-cube-svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .palette-btn-all {
+    height: 54px;
+    padding: 8px 10px;
+    font-size: 0.65rem;
+  }
+
+  .sculpt-toolbar {
+    gap: 8px;
+    padding: 4px 8px;
+  }
+
+  .telemetry-card {
+    min-width: 200px;
+    font-size: 0.9rem;
+  }
+}
