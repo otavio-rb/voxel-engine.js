@@ -9,7 +9,7 @@ export interface ChunkContext {
   readonly endY: number;
   readonly startZ: number;
   readonly endZ: number;
-  readonly blocks: Int8Array;
+  readonly blocks: Int16Array;
   readonly waterLevels: Uint8Array;
   readonly worldParams: WorldParams;
   readonly simplex: SimplexNoise;
@@ -19,6 +19,10 @@ export interface ChunkContext {
    * qualquer resolucao, e as frequencias de ruido nao precisam ser redescobertas na mao.
    */
   readonly voxelsPerBlock: number;
+  /**
+   * Quantos voxels de MUNDO cada celula deste chunk representa. 1 = resolucao cheia.
+   */
+  readonly stride: number;
 
   setBlock(x: number, y: number, z: number, type: number): void;
   getBlock(x: number, y: number, z: number): number;

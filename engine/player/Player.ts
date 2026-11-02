@@ -6,7 +6,13 @@ import { blockRegistry } from '../blocks/BlockRegistry';
 
 export type PlayerMode = 'normal' | 'debug';
 
-interface PlayerOptions {
+export interface PlayerDimensions {
+  width: number;
+  height: number;
+  eyeHeight: number;
+}
+
+export interface PlayerOptions {
   camera: PerspectiveCamera;
   world: ProceduralWorld;
   mode?: PlayerMode;
@@ -16,12 +22,32 @@ interface PlayerOptions {
    * entao o jogador e a fisica e que crescem nessa proporcao.
    */
   voxelsPerBlock?: number;
+  /**
+   * Escala relativa do corpo do jogador (1.0 = proporção humana padrão;
+   * valores menores como 0.35 criam um personagem menor adequado para mundos micro-voxel).
+   */
+  scale?: number;
+  /** Custom player collider dimensions (in world voxel units). */
+  dimensions?: Partial<PlayerDimensions>;
+  /** Maximum obstacle height (in world voxel units) the player steps up automatically when grounded. */
+  stepHeight?: number;
+  /** Optional movement parameter overrides applied on top of `scaleMovement(voxelsPerBlock)`. */
+  movement?: Partial<MovementTable>;
+  /**
+   * World Y threshold below which the player is automatically teleported back to origin spawn.
+   * Default `-500 * voxelsPerBlock`. Pass `null` to disable void reset.
+   */
+  voidResetY?: number | null;
 }
 
 /**
- * Movement constants from Minecraft 1.8 (units: blocks and ticks of 50 ms).
- * See https://www.mcpk.wiki/wiki/Horizontal_Movement_Formulas and
- * https://www.mcpk.wiki/wiki/Vertical_Movement_Formulas
+ * Default human-scale movement profile (units: blocks and ticks of 50 ms) — fully
+ * overridable per instance via `PlayerOptions.movement`, or replace `Player` with your own
+ * class built on `KinematicBody` for a different feel entirely. The numbers below happen to
+ * match Minecraft 1.8's formulas (a well-documented, well-tuned walking/jumping feel —
+ * see https://www.mcpk.wiki/wiki/Horizontal_Movement_Formulas and
+ * https://www.mcpk.wiki/wiki/Vertical_Movement_Formulas), not because the engine assumes
+ * Minecraft-style gameplay.
  */
 export const MOVEMENT = {
   TICK_MS: 50,
@@ -83,11 +109,12 @@ const MOVEMENT_LENGTHS = [
  * BOB_STRIDE e fase-por-comprimento, logo escala ao contrario, para que o balanco da
  * caminhada mantenha a mesma frequencia visual.
  */
-export function scaleMovement(voxelsPerBlock: number): MovementTable {
+export function scaleMovement(voxelsPerBlock: number, playerScale: number = 1): MovementTable {
   const table = { ...MOVEMENT } as MovementTable;
-  if (voxelsPerBlock === 1) return table;
-  for (const key of MOVEMENT_LENGTHS) table[key] = MOVEMENT[key] * voxelsPerBlock;
-  table.BOB_STRIDE = MOVEMENT.BOB_STRIDE / voxelsPerBlock;
+  const factor = voxelsPerBlock * playerScale;
+  if (factor === 1) return table;
+  for (const key of MOVEMENT_LENGTHS) table[key] = MOVEMENT[key] * factor;
+  table.BOB_STRIDE = MOVEMENT.BOB_STRIDE / factor;
   return table;
 }
 
@@ -106,17 +133,17 @@ export default class Player {
   private readonly keys: Record<string, boolean> = {};
   /** Voxels por bloco; 1 no voxel classico. Ver PlayerOptions.voxelsPerBlock. */
   public readonly voxelsPerBlock: number;
+  /** Escala relativa do corpo do jogador. */
+  public playerScale: number;
   /**
    * Velocidade de voo livre, em unidades de mundo por tick de 50 ms. Default: o valor do
    * MC 1.8 escalado (1.8 blocos/tick, ~36 blocos/s).
-   *
-   * Vale ajustar quando a distancia de carregamento e curta em blocos, o que e o caso de
-   * um mundo de minivoxels: voar 36 blocos/s num raio carregado de 32 blocos significa
-   * cruzar o mundo inteiro em menos de um segundo, e o streaming nunca alcança.
    */
   public flySpeed: number;
-  private readonly mv: MovementTable;
-  private readonly dimensions: { width: number; height: number; eyeHeight: number };
+  /** Mutable movement physics table for this player instance. */
+  public mv: MovementTable;
+  private readonly dimensions: PlayerDimensions;
+  public voidResetY: number | null;
   private canMove = true;
   private mode: PlayerMode;
   /** Velocity pushed by effects (black holes, explosions), in blocks per 60 Hz frame. */
@@ -130,7 +157,7 @@ export default class Player {
   private readonly prevPosition = new Vector3();
   private renderT = 1;
 
-  // ── Minecraft movement state ─────────────────────────────────────────────
+  // ── Movement state ───────────────────────────────────────────────────────
   private sprinting = false;
   private sneaking = false;
   private jumpTicks = 0;
@@ -155,15 +182,28 @@ export default class Player {
   private readonly baseQuaternion = new Quaternion();
   private viewEffectsApplied = false;
 
-  constructor({ camera, world, mode = 'debug', voxelsPerBlock = 1 }: PlayerOptions) {
+  constructor({
+    camera,
+    world,
+    mode = 'debug',
+    voxelsPerBlock = 1,
+    scale = 1,
+    dimensions,
+    stepHeight,
+    movement,
+    voidResetY
+  }: PlayerOptions) {
     this.voxelsPerBlock = voxelsPerBlock;
-    this.mv = scaleMovement(voxelsPerBlock);
+    this.playerScale = scale;
+    const factor = voxelsPerBlock * scale;
+    this.mv = { ...scaleMovement(voxelsPerBlock, scale), ...movement };
     this.flySpeed = this.mv.FLY_SPEED;
     this.dimensions = {
-      width:     0.6 * voxelsPerBlock,
-      height:    1.8 * voxelsPerBlock,
-      eyeHeight: 1.62 * voxelsPerBlock
+      width:     dimensions?.width     ?? 0.6 * factor,
+      height:    dimensions?.height    ?? 1.8 * factor,
+      eyeHeight: dimensions?.eyeHeight ?? 1.62 * factor
     };
+    this.voidResetY = voidResetY === undefined ? -500 * voxelsPerBlock : voidResetY;
     this.camera = camera;
     this.camera.rotation.order = 'YXZ';
     this.world = world;
@@ -175,13 +215,31 @@ export default class Player {
     this.body = new KinematicBody({
       dimensions: { width: this.dimensions.width, height: this.dimensions.height },
       eyeHeight: this.dimensions.eyeHeight,
+      stepHeight: stepHeight ?? 0.6 * factor,
       gravity: GRAVITY_UNIT,
-      unitScale: voxelsPerBlock
+      unitScale: factor
     });
 
     this.camera.position.set(2 * voxelsPerBlock, 41.6 * voxelsPerBlock, 2 * voxelsPerBlock);
     this.body.position.copy(this.camera.position);
     this.prevPosition.copy(this.body.position);
+  }
+
+  /**
+   * Altera a escala do corpo e da física do jogador dinamicamente.
+   */
+  public setScale(scale: number): void {
+    if (!Number.isFinite(scale) || scale <= 0.05) return;
+    this.playerScale = scale;
+    this.mv = scaleMovement(this.voxelsPerBlock, scale);
+    this.flySpeed = this.mv.FLY_SPEED;
+    const factor = this.voxelsPerBlock * scale;
+    this.setDimensions({
+      width:     0.6 * factor,
+      height:    1.8 * factor,
+      eyeHeight: 1.62 * factor
+    });
+    this.body.stepHeight = 0.6 * factor;
   }
 
   /** Current motion in blocks per tick (20 TPS). */
@@ -199,6 +257,37 @@ export default class Player {
 
   public get isSneaking(): boolean {
     return this.sneaking;
+  }
+
+  public get stepHeight(): number {
+    return this.body.stepHeight;
+  }
+
+  public set stepHeight(value: number) {
+    this.body.stepHeight = value;
+  }
+
+  public getMode(): PlayerMode {
+    return this.mode;
+  }
+
+  public setDimensions(dims: Partial<PlayerDimensions>): void {
+    if (dims.width !== undefined) {
+      this.dimensions.width = dims.width;
+      this.body.dimensions.width = dims.width;
+    }
+    if (dims.height !== undefined) {
+      this.dimensions.height = dims.height;
+      this.body.dimensions.height = dims.height;
+    }
+    if (dims.eyeHeight !== undefined) {
+      this.dimensions.eyeHeight = dims.eyeHeight;
+      this.body.eyeHeight = dims.eyeHeight;
+    }
+  }
+
+  public getDimensions(): Readonly<PlayerDimensions> {
+    return this.dimensions;
   }
 
   public setMode(mode: PlayerMode): void {
@@ -256,7 +345,7 @@ export default class Player {
       this.lastForwardTapTick = this.tickCount;
     }
 
-    if(k === ' ' && !isRepeat){
+    if (k === ' ' && !isRepeat) {
       if (this.tickCount - this.lastForwardTapTick <= this.mv.DOUBLE_TAP_TICKS) {
         this.sprintRequested = true;
       }
@@ -390,8 +479,8 @@ export default class Player {
       this.tickWalking();
     }
 
-    // Reset de queda abismal
-    if (pos.y < -500 * this.voxelsPerBlock) {
+    // Reset de queda abismal (quando configurado)
+    if (this.voidResetY !== null && pos.y < this.voidResetY) {
       this.teleport(0, 41.6 * this.voxelsPerBlock, 0);
     }
   }

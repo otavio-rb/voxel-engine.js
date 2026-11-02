@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.env
+.env.*
+
+# Temporary / Scratch & design assets
+scratch/
+*.zip
+stitch_voxelengine_docs_design/
+PROFILE_README.md

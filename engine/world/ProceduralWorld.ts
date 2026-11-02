@@ -15,11 +15,15 @@ import {
   PerspectiveCamera, 
   WebGLRenderer,
   Scene,
-  Color
+  Color,
+  Matrix4,
+  Vector2
 } from 'three';
-import WorkerPool from './WorkerPool';
+import WorkerPool, { type WorkerPoolStats } from './WorkerPool';
+import { ShadowMap, SHADOW_LAYER, type ShadowMapOptions } from '../render/ShadowMap';
 import Sky from './Sky';
 import WaterSimulator, { WorldWaterAccess } from '../physics/WaterSimulator';
+import FluidCellularAutomata, { type FluidCAOptions } from '../physics/FluidCellularAutomata';
 import { AIR, blockRegistry } from '../blocks/BlockRegistry';
 import { 
   WorldParams, 
@@ -36,11 +40,10 @@ import { EntityManager } from '../entities/EntityManager';
 import { DimensionDefinition, DEFAULT_DIMENSION } from '../dimension/Dimension';
 import { dimensionRegistry } from '../dimension/DimensionRegistry';
 import { LightChunk, LightEngine } from './LightEngine';
-import {
-  createPaletteTexture,
-  createVoxelRaymarchMaterial,
-  createVoxelTexture
-} from '../render/VoxelRaymarch';
+import { BRICK, GlobalBrickMap } from '../render/brickmap/GlobalBrickMap';
+import { EmissiveLightField } from '../render/brickmap/EmissiveLightField';
+import { GlobalRaymarchPass } from '../render/brickmap/GlobalRaymarchPass';
+import { FarFieldStreamer } from './FarFieldStreamer';
 
 export interface ProceduralWorldOptions extends WorldConfig {
   camera: PerspectiveCamera;
@@ -91,11 +94,34 @@ export interface ProceduralWorldOptions extends WorldConfig {
    */
   shareUniformChunks?: boolean;
   /**
-   * Como um chunk e desenhado. `'mesh'` (default) e o greedy meshing. `'raymarch'` e o
-   * prototipo de DDA em textura 3D: nao gera malha nenhuma, desenha a caixa do chunk e
-   * percorre os voxels no fragment shader. Ver render/VoxelRaymarch.ts.
+   * Como o mundo e desenhado.
+   *
+   * `'mesh'` (default) e o greedy meshing: uma malha por chunk.
+   *
+   * `'raymarch'` nao gera malha nenhuma. Os voxels do mundo inteiro vivem em UMA estrutura
+   * esparsa na GPU (grade de indirecao + atlas de bricks) e um unico triangulo de tela cheia
+   * percorre o DDA por pixel, com sombra e luz tracadas por raio secundario.
+   * Ver render/brickmap/.
    */
   chunkRenderer?: 'mesh' | 'raymarch';
+  /**
+   * So no raymarch: quantos bricks de 8^3 o atlas da GPU comporta. Cada slot custa 512 bytes,
+   * e so bricks MISTOS (nem ar puro, nem solido uniforme) ocupam um.
+   *
+   * Default 98.304 (48 MB). Estourar nao quebra nada -- o brick vira solido uniforme, que fica
+   * feio mas nao abre buraco -- e `brickMapStats().allocFailures` denuncia.
+   */
+  brickAtlasSlots?: number;
+  /**
+   * So no raymarch: quantos raios de sombra de luz pontual cada pixel pode gastar (default 3).
+   * E o controle de custo mais direto da cena: cada unidade e um DDA a mais por pixel.
+   */
+  lightShadowBudget?: number;
+  /**
+   * Se true (default), faz fusao de faces adjacentes coplanares na malha (Greedy Meshing).
+   * Se false, emite quads individuais por face exposta (Naive Meshing).
+   */
+  greedyMeshing?: boolean;
   /**
    * Faixa vertical do mundo, em chunks: `[minChunkY, maxChunkY]`. Default `[-32, 8]`, que e
    * a faixa do mundo classico (chunks de 16 voxels). Um mundo com outro chunkSize ou outra
@@ -113,17 +139,23 @@ export interface ProceduralWorldOptions extends WorldConfig {
    * (deeper chunks stay dark until real light reaches them). Default 0.
    */
   openSkyMinY?: number;
+  /**
+   * Modo de simulacao de fluidos:
+   * - 'cellular_automata': simulacao discreta por automato celular (ideal para minivoxels).
+   * - 'scalar': simulacao escalar clássica por difusão / water levels.
+   * - 'none': desativado.
+   */
+  fluidSimulation?: 'cellular_automata' | 'scalar' | 'none';
+  /** Intervalo em ms do tick da simulacao de fluidos (default 35ms). */
+  fluidTickIntervalMs?: number;
+  /** Limite maximo de atualizacoes de celula por tick (default 8000). */
+  fluidMaxUpdatesPerTick?: number;
+  /**
+   * Anima a subida dos chunks recem-gerados (default: true).
+   * Desligar (`false`) evita o efeito de 'pop-in' vindo de baixo em mundos estaticos/dioramas.
+   */
+  chunkRiseAnimation?: boolean;
 }
-
-/**
- * Uniforms do raymarch que valem para o mundo todo, nao por chunk. Os clones por chunk
- * apontam para os mesmos objetos, entao atualizar o template atualiza todos.
- */
-const RAYMARCH_SHARED_UNIFORMS = [
-  'uPalette', 'uChunkSize', 'uMaxSteps',
-  'uSunDirection', 'uSkyColor', 'uFogNear', 'uFogFar', 'uDaylight', 'uMinLight',
-  'uVoxelEdge', 'uVoxelEdgeFade', 'uVoxelGrain', 'uDebugSteps', 'uProjection'
-] as const;
 
 /** Como `editSphere` trata cada voxel da esfera. */
 export type SphereEditMode = 'destroy' | 'fill' | 'paint';
@@ -151,29 +183,37 @@ interface LoadedChunk extends LightChunk {
   sharedBlocks?: boolean;
   /** `light` e compartilhado; idem. */
   sharedLight?: boolean;
-  /** Caminho de raymarch: a caixa desenhada e a textura 3D de voxels deste chunk. */
-  raymarchMesh?: Mesh | null;
-  voxelTexture?: Data3DTexture | null;
+  /** Raymarch: o chunk ja foi publicado no brickmap global (e precisa ser retirado no unload). */
+  inBrickMap?: boolean;
   /** Passo de LOD da malha atual (1 = resolucao cheia); undefined enquanto nao houver malha. */
   lod?: number;
 }
 
 /**
- * GLSL shared by the chunk materials: Minecraft-style lightmap with a warm sun and cool
- * ambient, fog that glows toward the sun, and texture-less voxel surface grain.
+ * GLSL shared by the chunk materials.
+ *
+ * O lightmap continua sendo o do Minecraft (um canal de ceu e um de bloco, propagados pelo
+ * `LightEngine`), mas quem decide a *cor* da luz aqui e o ceu: `uSunColor` e
+ * `uAmbientColor` vem do `Sky` a cada quadro, entao a mesma parede fica dourada no poente,
+ * azul-acinzentada no crepusculo e quase monocromatica a noite, sem nenhuma logica por
+ * bioma. E a diferenca entre "terreno iluminado" e "terreno sob um ceu".
+ *
+ * Em cima disso ha um modelo especular GGX: a luz direta ganha um lobo de reflexao com
+ * rugosidade por material, o que da a pedra um brilho largo, ao metal um brilho cravado e
+ * a chuva (via `uWetness`) o verniz escuro e refletivo que e metade do efeito "shaderpack".
  */
 const VOXEL_SHADING_GLSL = /* glsl */ `
   uniform vec3 uSkyColor;
+  uniform vec3 uSunColor;
+  uniform vec3 uAmbientColor;
   uniform vec3 uSunDirection;
   uniform float uFogNear;
   uniform float uFogFar;
   uniform float uDaylight;
   uniform float uMinLight;
   uniform vec3 uBlockLightColor;
+  uniform float uWetness;
   varying vec2 vLight;
-
-  const vec3 SUN_TINT = vec3(1.06, 1.0, 0.9);
-  const vec3 SHADE_TINT = vec3(0.88, 0.94, 1.08);
 
   uniform float uVoxelGrain;
   uniform float uVoxelEdge;
@@ -185,19 +225,11 @@ const VOXEL_SHADING_GLSL = /* glsl */ `
     return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
   }
 
-  /**
-   * Contorno do voxel na face.
-   *
-   * Em superficie plana o greedy meshing funde muitos voxels em um unico quad, e a AO e
-   * por vertice: nada na imagem revela o tamanho do voxel. Sem isso, um mundo de
-   * minivoxels e indistinguivel de um mundo de blocos grandes em qualquer parede lisa.
-   *
-   * O contorno desaparece com a distancia (derivado de uFogNear, nao de fwidth, que
-   * exigiria a extensao de derivadas): de longe um grid de 1 voxel viraria moire.
-   */
+  float luminance3(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
   float voxelEdge(vec3 p, vec3 n) {
     vec3 f = abs(fract(p) - 0.5);
-    vec3 planeMask = 1.0 - abs(n);          // ignora o eixo da normal
+    vec3 planeMask = 1.0 - abs(n);
     float d = max(max(f.x * planeMask.x, f.y * planeMask.y), f.z * planeMask.z);
     float line = smoothstep(0.40, 0.5, d);
     float dist = length(p - cameraPosition);
@@ -205,29 +237,239 @@ const VOXEL_SHADING_GLSL = /* glsl */ `
     return line * fade;
   }
 
-  // Brilho = l / (4 - 3l) como no Minecraft; luz do céu tingida pelo sol, luz de bloco quente
-  vec3 voxelLight(vec3 normal, float sunDiffuse) {
+  /** Base ortonormal da face. Em voxels toda face e alinhada ao eixo, entao e exata. */
+  void voxelTangents(vec3 n, out vec3 tangent, out vec3 bitangent) {
+    vec3 up = abs(n.y) > 0.5 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    bitangent = normalize(cross(n, up));
+    tangent = normalize(cross(bitangent, n));
+  }
+
+  /**
+   * Perturba a normal pelo gradiente do mesmo hash que desenha o grao da superficie.
+   * Sem isso o grao e só uma variacao de albedo, que o olho le como sujeira; com a normal
+   * perturbada ele passa a reagir a direcao do sol, e a superficie ganha relevo de fato.
+   */
+  vec3 voxelBumpNormal(vec3 p, vec3 n, float strength) {
+    if (strength <= 0.0) return n;
+    vec3 t, b;
+    voxelTangents(n, t, b);
+    const float scale = 16.0;
+    float h0 = voxelHash(floor(p * scale));
+    float ht = voxelHash(floor((p + t / scale) * scale));
+    float hb = voxelHash(floor((p + b / scale) * scale));
+    return normalize(n - (t * (ht - h0) + b * (hb - h0)) * strength);
+  }
+
+  // ── Especular GGX ──────────────────────────────────────────────────────────
+  float ggxDistribution(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(3.14159265 * d * d, 1e-6);
+  }
+
+  float ggxGeometry(float NdotV, float NdotL, float roughness) {
+    float k = (roughness + 1.0);
+    k = k * k * 0.125;
+    float gv = NdotV / (NdotV * (1.0 - k) + k);
+    float gl = NdotL / (NdotL * (1.0 - k) + k);
+    return gv * gl;
+  }
+
+  float fresnelSchlick(float cosTheta, float f0) {
+    return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+  }
+
+  /** Reflexo especular da luz direta. visibility e o quanto a face ve o ceu. */
+  vec3 voxelSpecular(vec3 normal, vec3 viewDir, float roughness, float f0, float visibility) {
+    vec3 L = normalize(uSunDirection);
+    float NdotL = dot(normal, L);
+    if (NdotL <= 0.0 || visibility <= 0.001) return vec3(0.0);
+
+    vec3 H = normalize(L + viewDir);
+    float NdotV = max(dot(normal, viewDir), 1e-3);
+    float NdotH = max(dot(normal, H), 0.0);
+    float D = ggxDistribution(NdotH, max(roughness, 0.03));
+    float G = ggxGeometry(NdotV, NdotL, max(roughness, 0.03));
+    float F = fresnelSchlick(max(dot(H, viewDir), 0.0), f0);
+    float spec = (D * G * F) / (4.0 * NdotV);
+    // O sol baixo no horizonte nao deve cravar um ponto de luz em todas as faces.
+    float sunUp = smoothstep(-0.08, 0.18, L.y);
+    return uSunColor * spec * visibility * uDaylight * sunUp;
+  }
+
+  /**
+   * Rampa da luz de bloco. Uma tocha nao e um branco escurecido: o nucleo e ambar quase
+   * branco e a borda do alcance cai para vermelho profundo, porque a fonte e uma chama.
+   * Essa troca de matiz ao longo da queda e o que faz uma caverna iluminada parecer quente.
+   */
+  vec3 blockLightRamp(float intensity) {
+    float i = clamp(intensity, 0.0, 1.0);
+    vec3 ember = vec3(0.95, 0.26, 0.06);
+    vec3 core = uBlockLightColor;
+    float falloff = i * i * (3.0 - 2.0 * i);
+    return mix(ember, core, pow(i, 0.55)) * falloff;
+  }
+
+  /** Cor da luz difusa do ceu: azul do zenite de dia, quase neutra e escura de noite. */
+  vec3 skyAmbientColor() {
+    vec3 night = vec3(0.09, 0.12, 0.22);
+    return mix(night, max(uAmbientColor, vec3(0.02)), clamp(uDaylight * 1.25, 0.0, 1.0));
+  }
+
+  // ── Sombra direcional ──────────────────────────────────────────────────────
+  uniform sampler2D uShadowMap;
+  uniform mat4 uShadowMatrix;
+  uniform vec2 uShadowTexel;
+  uniform float uShadowStrength;
+  uniform float uShadowNormalBias;
+  uniform float uShadowRadius;
+  uniform float uShadowSoftness;
+  uniform float uShadowDepthRange;
+
+  /**
+   * Amostra i de uma espiral de angulo dourado. A espiral e FIXA, nao girada por pixel:
+   * girar distribui melhor, mas troca a borda em degraus por granulado — e granulado e
+   * exatamente o que nao se quer aqui.
+   */
+  vec2 shadowTap(int i, int count, float radius) {
+    float fi = (float(i) + 0.5) / float(count);
+    float angle = fi * 6.2831853 * 3.0;
+    return vec2(cos(angle), sin(angle)) * sqrt(fi) * radius;
+  }
+
+  /**
+   * 1 = recebe sol, 0 = totalmente na sombra de outra geometria.
+   *
+   * O deslocamento e feito ao longo da normal da face, nao na profundidade: as faces de
+   * um voxel sao planos alinhados ao eixo, e um bias de profundidade nelas desgruda a
+   * sombra da base do objeto (peter-panning). Empurrar o ponto de amostragem para fora
+   * da face resolve o acne sem mover a sombra de lugar.
+   */
+  float shadowFactor(vec3 worldPos, vec3 faceNormal) {
+    if (uShadowStrength <= 0.001) return 1.0;
+
+    float texelWorld = (2.0 * uShadowRadius) * uShadowTexel.x;
+    vec3 biased = worldPos + faceNormal * texelWorld * uShadowNormalBias;
+    vec4 lightSpace = uShadowMatrix * vec4(biased, 1.0);
+    if (lightSpace.w <= 0.0) return 1.0;
+    vec3 coord = lightSpace.xyz / lightSpace.w;
+    // Fora do volume do mapa nao ha informacao: assumir "iluminado" e o unico palpite
+    // que nao escurece metade do mundo alem do alcance da sombra.
+    if (coord.z > 1.0 || coord.x < 0.0 || coord.x > 1.0 || coord.y < 0.0 || coord.y > 1.0) {
+      return 1.0;
+    }
+
+    // ── PCSS com transicoes continuas sem popping ─────────────────────────────
+    float bias = 0.0006;
+    float searchRadius = 4.5;
+    float blockerDepth = 0.0;
+    float blockerWeight = 0.0;
+    for (int i = 0; i < 12; i++) {
+      vec2 offset = shadowTap(i, 12, searchRadius) * uShadowTexel;
+      float mapDepth = texture2D(uShadowMap, coord.xy + offset).x;
+      float diff = (coord.z - bias) - mapDepth;
+      if (diff > 0.0) {
+        float w = clamp(diff * 4000.0, 0.0, 1.0);
+        blockerDepth += mapDepth * w;
+        blockerWeight += w;
+      }
+    }
+    // Nenhum oclusor na vizinhanca: o pixel ve o sol
+    if (blockerWeight < 0.001) return 1.0;
+    blockerDepth /= blockerWeight;
+
+    // A diferenca de profundidade normalizada vira distancia em unidades de cena, e dai
+    // em texels — e assim a penumbra fica em blocos, independente da resolucao do mapa.
+    float gapWorld = max(0.0, (coord.z - blockerDepth) * uShadowDepthRange);
+    float penumbra = clamp(gapWorld * uShadowSoftness / max(texelWorld, 1e-5), 1.0, 10.0);
+
+    float visible = 0.0;
+    for (int i = 0; i < 16; i++) {
+      vec2 offset = shadowTap(i, 16, penumbra) * uShadowTexel;
+      float mapDepth = texture2D(uShadowMap, coord.xy + offset).x;
+      float depthDelta = mapDepth - (coord.z - bias);
+      // Rampa suave de profundidade elimina o degrau de 1-bit e o flickering de texel
+      visible += clamp(depthDelta * 4000.0 + 0.5, 0.0, 1.0);
+    }
+    visible /= 16.0;
+
+    // Transicao suave na borda da deteccao de oclusores para evitar popping binario
+    float blockerFade = smoothstep(0.0, 1.5, blockerWeight);
+    visible = mix(1.0, visible, blockerFade);
+
+    // Desvanece na borda do mapa, senao o limite do volume desenha uma linha reta no chao.
+    vec2 edge = abs(coord.xy - 0.5) * 2.0;
+    float fade = 1.0 - smoothstep(0.82, 1.0, max(edge.x, edge.y));
+    return mix(1.0, mix(1.0, visible, uShadowStrength), fade);
+  }
+
+  /**
+   * O parametro shadow multiplica APENAS a componente direta. A luz difusa do ceu chega de toda a
+   * cupula e nao e bloqueada pelo mesmo obstaculo, entao escurecer ela junto produziria
+   * sombras pretas em vez do azul que uma sombra ao ar livre realmente tem.
+   */
+  vec3 voxelLight(vec3 normal, float sunDiffuse, float shadow) {
     float sky = vLight.x * uDaylight;
     float blk = vLight.y;
-    float skyB = sky / (4.0 - 3.0 * sky);
-    float blkB = blk / (4.0 - 3.0 * blk);
-    float face = normal.y > 0.5 ? 1.0 : (normal.y < -0.5 ? 0.5 : (abs(normal.x) > 0.5 ? 0.7 : 0.85));
-    float lit = mix(1.0, 0.78 + 0.34 * sunDiffuse, uDaylight);
-    vec3 tint = mix(vec3(1.0), mix(SHADE_TINT, SUN_TINT, sunDiffuse), uDaylight * 0.8);
-    vec3 light = max(skyB * face * lit * tint, uBlockLightColor * blkB * face);
+
+    float skyB = pow(sky, 1.35);
+    float blkB = pow(blk, 1.45);
+
+    // Directional face shading: top face is bright, bottom shaded, sides contrasty
+    float face = normal.y > 0.5 ? 1.0 : (normal.y < -0.5 ? 0.52 : (abs(normal.x) > 0.5 ? 0.72 : 0.86));
+
+    // Separa a luz do ceu em difusa (de toda a cupula) e direta (do disco do sol). A
+    // difusa e a que sobra na sombra, e e azulada; a direta e colorida pelo poente.
+    vec3 ambient = skyAmbientColor() * (0.42 + 0.24 * face);
+    vec3 direct = max(uSunColor, vec3(0.02)) * (0.62 + 0.48 * sunDiffuse) * face * shadow;
+    vec3 skyLight = skyB * mix(ambient, direct, uDaylight * (0.35 + 0.5 * sunDiffuse));
+
+    vec3 blockLight = blockLightRamp(blkB) * (0.75 + 0.45 * face) * 1.25;
+
+    // max em vez de soma: os dois canais do lightmap descrevem a MESMA energia vista por
+    // duas fontes, e somar estoura o interior de uma casa iluminada em pleno dia.
+    vec3 light = max(skyLight, blockLight);
     return max(light, vec3(uMinLight * face));
   }
 
-  // Neblina com brilho quente na direção do sol
+  vec3 voxelLight(vec3 normal, float sunDiffuse) {
+    return voxelLight(normal, sunDiffuse, 1.0);
+  }
+
+  vec3 voxelLight(vec3 normal, vec3 worldPos, float aoMultiplier) {
+    float NdotL = max(dot(normal, normalize(uSunDirection)), 0.0);
+    return voxelLight(normal, NdotL, shadowFactor(worldPos, normal)) * aoMultiplier;
+  }
+
+  /**
+   * Nevoa de distancia com perspectiva aerea: cristalina ate uFogNear, e depois cresce
+   * com a distancia enquanto acende na direcao do sol. O expoente alto do termo de
+   * espalhamento concentra o brilho perto do disco solar, que e o que produz o horizonte
+   * dourado em vez de um veu uniforme por toda a borda do mundo.
+   */
   vec3 applyFog(vec3 color, vec3 worldPos) {
     vec3 toFrag = worldPos - cameraPosition;
     float dist = length(toFrag);
-    float fog = smoothstep(uFogNear, uFogFar, dist);
-    float sunAmount = pow(max(dot(toFrag / max(dist, 1e-3), normalize(uSunDirection)), 0.0), 8.0) * uDaylight;
-    vec3 fogColor = mix(uSkyColor, vec3(1.0, 0.86, 0.66), sunAmount * 0.45);
+
+    // Completely clear up to uFogNear - ZERO fog near the player
+    float t = smoothstep(uFogNear, uFogFar, dist);
+    if (t <= 0.001) return color;
+    // Curva exponencial sobre a rampa: a transicao para o horizonte fica sem a "parede"
+    // visivel que um smoothstep puro deixa no limite de renderizacao.
+    float fog = 1.0 - exp(-3.0 * t * t);
+
+    vec3 rayDir = toFrag / max(dist, 1e-3);
+    float cosSun = max(dot(rayDir, normalize(uSunDirection)), 0.0);
+    float sunScatter = (pow(cosSun, 8.0) * 0.55 + pow(cosSun, 2.0) * 0.18) * uDaylight;
+
+    vec3 glow = mix(vec3(1.0, 0.86, 0.66), max(uSunColor, vec3(0.05)), 0.55);
+    vec3 fogColor = mix(uSkyColor, glow, clamp(sunScatter, 0.0, 0.8));
+    // O ar olhado para baixo e mais denso e mais escuro que o olhado para o zenite.
+    fogColor *= mix(0.82, 1.06, clamp(rayDir.y * 0.5 + 0.5, 0.0, 1.0));
+
     return mix(color, fogColor, fog);
-  }
-`;
+  }`;
 
 export default class ProceduralWorld extends Group {
   /**
@@ -235,13 +477,16 @@ export default class ProceduralWorld extends Group {
    * esse fator so converte grandezas escritas em blocos (nevoa, alcance, fisica do jogador).
    */
   public readonly voxelsPerBlock: number;
-  private readonly chunkSize: number;
+  public readonly chunkSize: number;
   private chunkHeight: number;
   private renderDistance: number;
   private verticalRenderDistance: number;
+  /** Alcance vertical para baixo, em chunks. Ver WorldConfig.verticalRenderDistanceDown. */
+  private verticalRenderDistanceDown: number;
   private readonly camera: PerspectiveCamera;
   private readonly pool: WorkerPool;
   private readonly rebuildPool: WorkerPool;
+  private readonly greedyMeshing: boolean;
 
   // ─── Chunk state ──────────────────────────────────────────────────────────
   private readonly loadedChunks      = new Map<string, LoadedChunk>();
@@ -265,8 +510,8 @@ export default class ProceduralWorld extends Group {
   // apontam para o mesmo array por valor, e quem escreve materializa uma copia privada
   // primeiro (copy-on-write). Medido neste projeto, 68% a 90% dos chunks carregados sao
   // uniformes, e e isso que torna possivel carregar longe nos tres eixos.
-  private readonly sharedBlocksByValue = new Map<number, Int8Array>();
-  private readonly sharedSliceByValue  = new Map<number, Int8Array>();
+  private readonly sharedBlocksByValue = new Map<number, Int16Array>();
+  private readonly sharedSliceByValue  = new Map<number, Int16Array>();
   private readonly sharedWaterZero: Uint8Array;
   private readonly sharedLightByValue  = new Map<number, Uint8Array>();
   /** Limites de distancia (em chunks) de cada anel de LOD; vazio = sempre resolucao cheia. */
@@ -276,13 +521,34 @@ export default class ProceduralWorld extends Group {
   private readonly voxelEdgeFadeBlocks: number;
   private readonly shareUniformChunks: boolean;
   private readonly chunkRenderer: 'mesh' | 'raymarch';
-  private raymarchTemplate: ShaderMaterial | null = null;
+
+  // --- Caminho de raymarch: brickmap global ---------------------------------
+  // Tres objetos para o mundo inteiro, nao tres por chunk. Ver render/brickmap/.
+  private readonly brickMap: GlobalBrickMap | null = null;
+  private readonly lightField: EmissiveLightField | null = null;
+  private readonly raymarchPass: GlobalRaymarchPass | null = null;
+  /**
+   * Chunks que chegaram antes do renderer existir.
+   *
+   * O `GpuTexture3D` so pode subir dados depois que o three criou o objeto WebGL, e isso
+   * exige o renderer -- que o mundo so recebe em `attachRenderer`. Sem esta fila, todo chunk
+   * carregado no primeiro instante virava um buraco permanente no mundo.
+   */
+  private readonly pendingBrickUploads: LoadedChunk[] = [];
+
+  // --- Anel de LOD distante (opcional) --------------------------------------
+  // Estrutura identica a do campo proximo, so que em celulas grossas: outro brickmap, outro
+  // passe de tela cheia e um streamer proprio. Ver world/FarFieldStreamer.
+  private readonly farBrickMap: GlobalBrickMap | null = null;
+  private readonly farPass: GlobalRaymarchPass | null = null;
+  private farStreamer: FarFieldStreamer | null = null;
+  private readonly farConfig: WorldConfig['farField'] = undefined;
   /** Pinta cada pixel pelo numero de passos de DDA gastos: verde barato, vermelho caro. */
   public raymarchDebugSteps = false;
-  private paletteTexture: DataTexture | null = null;
   private readonly chunkYMin: number;
   private readonly chunkYMax: number;
   private readonly surfacePinRange: [number, number] | null;
+  private readonly chunkRiseAnimation: boolean;
 
   private readonly opaqueMaterial: ShaderMaterial;
   private readonly waterMaterial: ShaderMaterial;
@@ -293,9 +559,11 @@ export default class ProceduralWorld extends Group {
   private weatherFogColor: Color | null = null;
   private stormChoppiness = 0.0;
 
-  // ─── Water Simulation (Scalar Field) ──────────────────────────────────────
+  // ─── Water Simulation ─────────────────────────────────────────────────────
   private readonly activeWaterChunks = new Set<string>();
   private waterTickTimer = 0;
+  public readonly fluidCA: FluidCellularAutomata;
+  public fluidMode: 'cellular_automata' | 'scalar' | 'none';
 
   // Hot Cache for collision optimization
   private lastChunk: LoadedChunk | null = null;
@@ -317,6 +585,10 @@ export default class ProceduralWorld extends Group {
   private readonly blockEdgeMat:    LineBasicMaterial;
   private readonly entityManager: EntityManager;
   public activeDimension: DimensionDefinition;
+
+  public get daylight(): number {
+    return this.sky.daylight;
+  }
 
   /** World lifecycle hooks, e.g. `chunk:ready` (payload: ChunkReadyEvent). */
   public readonly events = new EventEmitter();
@@ -354,10 +626,13 @@ export default class ProceduralWorld extends Group {
     this.voxelEdgeFadeBlocks = config.voxelEdgeFadeBlocks ?? 20.0;
     this.shareUniformChunks = config.shareUniformChunks ?? true;
     this.chunkRenderer = config.chunkRenderer ?? 'mesh';
+    this.greedyMeshing = config.greedyMeshing ?? true;
     this.chunkSize      = config.chunkSize;
     this.chunkHeight    = config.chunkHeight; // Kept for backwards compatibility but not used for mesh height
     this.renderDistance = config.renderDistance;
     this.verticalRenderDistance = config.verticalRenderDistance;
+    this.verticalRenderDistanceDown =
+      config.verticalRenderDistanceDown ?? config.verticalRenderDistance;
     this.camera         = config.camera;
 
     this.activeDimension =
@@ -378,6 +653,14 @@ export default class ProceduralWorld extends Group {
     this.openSkyMinY = config.openSkyMinY ?? 0;
     [this.chunkYMin, this.chunkYMax] = config.chunkYRange ?? [-32, 8];
     this.surfacePinRange = config.surfacePinRange === undefined ? [0, 7] : config.surfacePinRange;
+    this.chunkRiseAnimation = config.chunkRiseAnimation ?? true;
+
+    // Inicializacao da simulacao de fluidos por automato celular
+    this.fluidMode = config.fluidSimulation ?? (this.voxelsPerBlock > 1 ? 'cellular_automata' : 'scalar');
+    this.fluidCA = new FluidCellularAutomata(this, {
+      tickIntervalMs: config.fluidTickIntervalMs,
+      maxUpdatesPerTick: config.fluidMaxUpdatesPerTick
+    });
 
     // Um passo de LOD so e valido se dividir o chunk: senao a reamostragem nao fecha.
     // Trunca o prefixo valido em vez de filtrar, porque o passo de cada anel vem do
@@ -386,6 +669,82 @@ export default class ProceduralWorld extends Group {
     let validRings = 0;
     while (validRings < rings.length && this.chunkSize % (2 ** (validRings + 1)) === 0) validRings++;
     this.lodRings = rings.slice(0, validRings);
+
+    if (this.chunkRenderer === 'raymarch') {
+      // A janela precisa ser maior que o conjunto de chunks vivos, senao dois chunks caem no
+      // mesmo texel do toro. A margem de +3 chunks por eixo absorve o arredondamento da
+      // origem (que anda em passo de chunk) sem recortar nada que esteja carregado.
+      const cb = this.chunkSize / BRICK;
+      const windowChunksXZ = 2 * this.renderDistance + 3;
+      const span = this.chunkYMax - this.chunkYMin;
+      const windowChunksY =
+        Math.min(this.verticalRenderDistanceDown, span) +
+        Math.min(this.verticalRenderDistance, span) + 3;
+
+      this.brickMap = new GlobalBrickMap({
+        chunkSize: this.chunkSize,
+        windowBricks: {
+          x: windowChunksXZ * cb,
+          y: windowChunksY * cb,
+          z: windowChunksXZ * cb
+        },
+        atlasSlots: config.brickAtlasSlots ?? 98_304
+      });
+
+      this.lightField = new EmissiveLightField(this.voxelsPerBlock);
+      this.raymarchPass = new GlobalRaymarchPass(this.brickMap, this.lightField, {
+        voxelsPerBlock: this.voxelsPerBlock,
+        voxelGrain: this.voxelGrain,
+        voxelEdge: this.voxelEdge,
+        voxelEdgeFadeBlocks: this.voxelEdgeFadeBlocks,
+        shadowBudget: config.lightShadowBudget
+      });
+      this.add(this.raymarchPass.mesh);
+
+      const far = config.farField;
+      this.farConfig = far;
+      if (far) {
+        // A janela do anel distante e medida em bricks DELE: um brick cobre
+        // `8 * stride` voxels de mundo, entao o mesmo alcance custa muito menos texels.
+        //
+        // A conta e em CHUNKS, nao em bricks. Medir o raio direto em bricks subestima: o
+        // conjunto vivo vai de `-ceil(r/chunk)` a `+ceil(r/chunk)` chunks INTEIROS, e um
+        // raio de 2.250 voxels que da 71 bricks na divisao direta ocupa de fato 88. A
+        // primeira versao errava exatamente isso, e a assercao de janela pegou no boot --
+        // que e para o que ela existe.
+        const farChunkWorld = far.chunkCells * far.stride;
+        const farChunkBricks = far.chunkCells / BRICK;
+        const windowBricks = (r: number) =>
+          (2 * Math.ceil(r / farChunkWorld) + 3) * farChunkBricks;
+        this.farBrickMap = new GlobalBrickMap({
+          chunkSize: far.chunkCells,
+          voxelScale: far.stride,
+          windowBricks: {
+            x: windowBricks(far.outerRadius),
+            y: windowBricks(far.verticalRadius),
+            z: windowBricks(far.outerRadius)
+          },
+          atlasSlots: far.atlasSlots
+        });
+
+        this.farPass = new GlobalRaymarchPass(this.farBrickMap, this.lightField, {
+          voxelsPerBlock: this.voxelsPerBlock,
+          voxelGrain: this.voxelGrain * 0.5,
+          // Contorno de voxel no campo distante so vira moire: a celula ali tem metros.
+          voxelEdge: 0,
+          voxelEdgeFadeBlocks: this.voxelEdgeFadeBlocks,
+          shadowBudget: 0,
+          // O anel fino ja reordena a lista de luzes por quadro.
+          ownsLights: false,
+          // Comeca onde o anel fino termina, com uma folga de um chunk para nao abrir
+          // fresta na emenda.
+          nearClip: this.renderDistance * this.chunkSize - this.chunkSize,
+          // Desenha ANTES do anel fino, que escreve por cima.
+          renderOrder: -1100
+        });
+        this.add(this.farPass.mesh);
+      }
+    }
 
     this.opaqueMaterial = new ShaderMaterial({
       uniforms: {
@@ -398,9 +757,21 @@ export default class ProceduralWorld extends Group {
         uDaylight:       { value: 1.0 },
         uMinLight:       { value: 0.03 },
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
+        uSunColor:       { value: new Color(1.0, 0.96, 0.9) },
+        uAmbientColor:   { value: new Color(0.55, 0.66, 0.86) },
+        uWetness:        { value: 0.0 },
+        uShadowMap:      { value: null },
+        uShadowMatrix:   { value: new Matrix4() },
+        uShadowTexel:    { value: new Vector2(1 / 2048, 1 / 2048) },
+        uShadowStrength: { value: 0.0 },
+        uShadowNormalBias: { value: 1.6 },
+        uShadowRadius:   { value: 96.0 * this.voxelsPerBlock },
+        uShadowSoftness: { value: 0.06 },
+        uShadowDepthRange: { value: 384.0 * this.voxelsPerBlock },
         uVoxelGrain:     { value: this.voxelGrain },
         uVoxelEdge:      { value: this.voxelEdge },
         uVoxelEdgeFade:  { value: this.voxelEdgeFadeBlocks * this.voxelsPerBlock },
+        uChunkRiseStrength: { value: this.chunkRiseAnimation ? 25.0 : 0.0 },
       },
       vertexShader: `
         attribute float creationTime;
@@ -414,6 +785,7 @@ export default class ProceduralWorld extends Group {
         varying float vAo;
         varying vec2 vLight;
         uniform float uTime;
+        uniform float uChunkRiseStrength;
         void main() {
           vNormal = normal;
           vColor = color;
@@ -428,7 +800,7 @@ export default class ProceduralWorld extends Group {
           float age = uTime - creationTime;
           float riseDuration = 1.0;
           float riseOffset = clamp(1.0 - (age / riseDuration), 0.0, 1.0);
-          pos.y -= pow(riseOffset, 2.0) * 25.0;
+          pos.y -= pow(riseOffset, 2.0) * uChunkRiseStrength;
 
           vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
 
@@ -465,14 +837,63 @@ export default class ProceduralWorld extends Group {
           // Centrado em 1.0: com uVoxelGrain 0.06 isso e exatamente (0.97 + 0.06 * block).
           vec3 albedo = vColor * (0.93 + 0.1 * texel) * (1.0 - uVoxelGrain * 0.5 + uVoxelGrain * block);
 
-          float diffuse = max(dot(vNormal, normalize(uSunDirection)), 0.0);
-          vec3 lighting = albedo * voxelLight(vNormal, diffuse) * aoMultiplier * 1.1;
+          vec3 viewDir = normalize(cameraPosition - vWorldPos);
+          // O relevo do grao desaparece com a distancia: de longe um texel e sub-pixel, e
+          // manter a perturbacao ali so produziria cintilacao entre quadros.
+          float detail = 1.0 - smoothstep(uVoxelEdgeFade * 0.25, uVoxelEdgeFade, length(vWorldPos - cameraPosition));
+          vec3 normal = voxelBumpNormal(inside, vNormal, 0.35 * detail);
+
+          // ── Propriedades de material (via surfaceType em vUv.y) ─────────────────
+          int surfaceType = int(vUv.y + 0.5);
+          float isFoliage = (surfaceType == 2) ? 1.0 : 0.0;
+          float isStone = (surfaceType == 1) ? 1.0 : 0.0;
+          float roughness = mix(0.82, 0.55, isStone);
+          roughness = mix(roughness, 0.95, isFoliage);
+          float f0 = mix(0.035, 0.05, isStone);
+
+          // Chuva: a agua preenche a microestrutura. A superficie escurece (a luz entra e
+          // nao volta), fica lisa e ganha Fresnel — o verniz molhado. So nas faces que
+          // veem o ceu e que recebem chuva, por isso o peso pela normal e pela luz de ceu.
+          float wet = uWetness * clamp(normal.y, 0.0, 1.0) * clamp(vLight.x * 1.4, 0.0, 1.0);
+          albedo *= mix(1.0, 0.68, wet);
+          roughness = mix(roughness, 0.12, wet);
+          f0 = mix(f0, 0.15, wet);
+
+          // A sombra usa a normal GEOMETRICA, nao a perturbada pelo relevo: a bumped
+          // pode apontar para dentro da face e empurrar a amostra para o lado errado.
+          float shadow = shadowFactor(vWorldPos, vNormal);
+
+          float diffuse = max(dot(normal, normalize(uSunDirection)), 0.0);
+          vec3 lighting = albedo * voxelLight(normal, diffuse, shadow) * aoMultiplier * 1.1;
+
+          // ── Luz direta especular ────────────────────────────────────────────────
+          // O especular tambem e luz direta: um reflexo de sol numa face na sombra de
+          // outro bloco nao existe.
+          float skyAccess = clamp(vLight.x * 1.25, 0.0, 1.0) * aoMultiplier;
+          lighting += voxelSpecular(normal, viewDir, roughness, f0, skyAccess * shadow);
+
+          // Reflexo do ceu nas pocas: num angulo rasante a face molhada vira espelho.
+          if (wet > 0.01) {
+            float fres = fresnelSchlick(max(dot(normal, viewDir), 0.0), 0.04);
+            vec3 skyReflection = mix(skyAmbientColor(), uSkyColor, 0.6) * skyAccess;
+            lighting = mix(lighting, lighting + skyReflection * 0.9, fres * wet);
+          }
+
+          // Translucidez de folhagem: olhando contra o sol, a luz atravessa a folha. E o
+          // que faz uma arvore acender nas bordas no contraluz em vez de virar silhueta.
+          if (isFoliage > 0.5) {
+            float through = pow(max(dot(viewDir, -normalize(uSunDirection)), 0.0), 3.0);
+            vec3 transmit = albedo * max(uSunColor, vec3(0.05)) * through * uDaylight
+                          * clamp(vLight.x, 0.0, 1.0) * mix(1.0, shadow, 0.6);
+            lighting += transmit * 0.85;
+          }
+
           if (uVoxelEdge > 0.0) {
             lighting *= 1.0 - uVoxelEdge * voxelEdge(inside, vNormal);
           }
 
-          // Magma emissive heat: if color matches magma block, emits warm fiery glow
-          if (vColor.r > 0.7 && vColor.b < 0.15 && vColor.g > 0.15 && vColor.g < 0.35) {
+          // Magma emissive heat (surfaceType == 3: magma)
+          if (surfaceType == 3) {
             float heatGlow = 0.45 + 0.25 * sin(uTime * 3.0 + vWorldPos.x * 2.0 + vWorldPos.y * 2.0 + vWorldPos.z * 2.0);
             lighting = max(lighting, albedo * (1.1 + heatGlow));
           }
@@ -501,10 +922,22 @@ export default class ProceduralWorld extends Group {
         uDaylight:       { value: 1.0 },
         uMinLight:       { value: 0.03 },
         uBlockLightColor: { value: new Color(1.0, 0.85, 0.65) },
+        uSunColor:       { value: new Color(1.0, 0.96, 0.9) },
+        uAmbientColor:   { value: new Color(0.55, 0.66, 0.86) },
+        uWetness:        { value: 0.0 },
+        uShadowMap:      { value: null },
+        uShadowMatrix:   { value: new Matrix4() },
+        uShadowTexel:    { value: new Vector2(1 / 2048, 1 / 2048) },
+        uShadowStrength: { value: 0.0 },
+        uShadowNormalBias: { value: 1.6 },
+        uShadowRadius:   { value: 96.0 * this.voxelsPerBlock },
+        uShadowSoftness: { value: 0.06 },
+        uShadowDepthRange: { value: 384.0 * this.voxelsPerBlock },
         uVoxelGrain:     { value: this.voxelGrain },
         uVoxelEdge:      { value: this.voxelEdge },
         uVoxelEdgeFade:  { value: this.voxelEdgeFadeBlocks * this.voxelsPerBlock },
         uStormChoppiness: { value: 0.0 },
+        uChunkRiseStrength: { value: this.chunkRiseAnimation ? 25.0 : 0.0 },
       },
       vertexShader: `
         attribute float creationTime;
@@ -512,15 +945,18 @@ export default class ProceduralWorld extends Group {
         attribute vec2 light;
         varying vec3 vNormal;
         varying vec3 vColor;
+        varying vec2 vUv;
         varying vec3 vWorldPos;
         varying float vAo;
         varying vec2 vLight;
         uniform float uTime;
         uniform float uStormChoppiness;
+        uniform float uChunkRiseStrength;
 
         void main() {
           vNormal = normal;
           vColor = color;
+          vUv = uv;
           vAo = ao;
           vLight = light;
           
@@ -530,12 +966,12 @@ export default class ProceduralWorld extends Group {
           float age = uTime - creationTime;
           float riseDuration = 1.0;
           float riseOffset = clamp(1.0 - (age / riseDuration), 0.0, 1.0);
-          pos.y -= pow(riseOffset, 2.0) * 25.0;
+          pos.y -= pow(riseOffset, 2.0) * uChunkRiseStrength;
 
           vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
           
-          // Use world coordinates so waves align across chunk borders (lava moves slower and thicker)
-          bool isLava = (vColor.r > 0.6 && vColor.b < 0.2);
+          // Use world coordinates so waves align across chunk borders (surfaceType 5 = lava)
+          bool isLava = (int(uv.y + 0.5) == 5);
           float waveSpeed = isLava ? 0.8 : (1.6 + uStormChoppiness * 2.2);
           float waveAmp = isLava ? 0.03 : (0.045 + uStormChoppiness * 0.16);
           float wave = sin(uTime * waveSpeed + vWorldPos.x * 0.5) + cos(uTime * (waveSpeed * 0.75) + vWorldPos.z * 0.5);
@@ -548,8 +984,10 @@ export default class ProceduralWorld extends Group {
       fragmentShader: `
         uniform float uTime;
         uniform float uShadersEnabled;
+        uniform float uStormChoppiness;
         varying vec3 vNormal;
         varying vec3 vColor;
+        varying vec2 vUv;
         varying vec3 vWorldPos;
         ${VOXEL_SHADING_GLSL}
 
@@ -569,7 +1007,7 @@ export default class ProceduralWorld extends Group {
         }
 
         void main() {
-          bool isLava = (vColor.r > 0.6 && vColor.b < 0.2);
+          bool isLava = (int(vUv.y + 0.5) == 5);
           if (isLava) {
             float pulse = sin(uTime * 2.5 + vWorldPos.x * 1.5 + vWorldPos.z * 1.5) * 0.5 + 0.5;
             float slow = cos(uTime * 1.2 - vWorldPos.x * 0.8 + vWorldPos.z * 0.8) * 0.5 + 0.5;
@@ -600,19 +1038,35 @@ export default class ProceduralWorld extends Group {
           float cosTheta = clamp(dot(n, viewDir), 0.0, 1.0);
           float fresnel = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
 
-          vec3 deep = base * light * 1.05;
-          vec3 skyLight = uSkyColor * (0.35 + 0.65 * vLight.x);
-          vec3 reflection = mix(skyLight * 0.9, skyLight * 1.25, n.y);
-          vec3 col = mix(deep, reflection, fresnel * 0.85);
+          // Absorcao: a agua come o vermelho primeiro, entao o volume fica turquesa, e o
+          // tom muda com a profundidade aparente (o quanto do angulo olha para dentro).
+          float depthView = mix(1.0, 0.35, cosTheta);
+          vec3 absorbed = base * exp(-vec3(0.62, 0.16, 0.08) * depthView * 2.2);
+          vec3 deep = absorbed * light * 1.05;
 
-          // Brilho especular do sol e cintilação nas cristas
-          vec3 sunDir = normalize(uSunDirection);
-          float sunUp = smoothstep(-0.05, 0.15, sunDir.y) * uDaylight * vLight.x;
-          vec3 h = normalize(sunDir + viewDir);
-          float spec = pow(max(dot(n, h), 0.0), 180.0) * 2.2 + pow(max(dot(n, h), 0.0), 24.0) * 0.12;
-          col += vec3(1.0, 0.95, 0.85) * spec * sunUp;
+          // Reflexo do ceu com gradiente: o zenite e mais claro e mais azul que o horizonte,
+          // entao a crista e a encosta de cada onda refletem cores diferentes.
+          vec3 horizonSky = mix(uSkyColor, skyAmbientColor(), 0.45);
+          vec3 zenithSky = mix(skyAmbientColor(), uSkyColor, 0.25) * 1.2;
+          vec3 skyLight = mix(horizonSky, zenithSky, clamp(n.y, 0.0, 1.0)) * (0.35 + 0.65 * vLight.x);
+          vec3 col = mix(deep, skyLight, fresnel * 0.9);
 
-          float alpha = mix(0.62, 0.95, fresnel) + spec * sunUp * 0.3;
+          // Especular GGX em duas rugosidades: o lobo estreito e o reflexo do disco solar,
+          // o largo e o brilho que a agitacao das ondas espalha em volta dele.
+          float skyAccess = clamp(vLight.x * 1.2, 0.0, 1.0) * shadowFactor(vWorldPos, vec3(0.0, 1.0, 0.0));
+          vec3 spec = voxelSpecular(n, viewDir, 0.045, 0.02, skyAccess) * 1.6
+                    + voxelSpecular(n, viewDir, 0.22, 0.02, skyAccess) * 0.5;
+          col += spec;
+
+          // Espuma na crista: onde a inclinacao da onda e maior a agua arrasta ar.
+          if (top) {
+            float slope = 1.0 - clamp(n.y, 0.0, 1.0);
+            float foam = smoothstep(0.035, 0.11, slope * (0.35 + uStormChoppiness)) * detail;
+            float speckle = voxelHash(floor(vWorldPos * 6.0 + vec3(uTime * 1.3, 0.0, uTime * 0.7)));
+            col = mix(col, vec3(0.92, 0.96, 1.0) * light, foam * (0.35 + 0.4 * speckle) * uStormChoppiness);
+          }
+
+          float alpha = mix(0.62, 0.95, fresnel) + clamp(luminance3(spec), 0.0, 1.0) * 0.25;
           gl_FragColor = vec4(applyFog(col, vWorldPos), clamp(alpha, 0.0, 1.0));
         }
       `,
@@ -811,6 +1265,84 @@ export default class ProceduralWorld extends Group {
     return this.opaqueMaterial;
   }
 
+  public getWorkerStats(): WorkerPoolStats {
+    return this.pool.getStats();
+  }
+
+  public getLoadedChunkCount(): number {
+    return this.loadedChunks.size;
+  }
+
+  public getActiveDimensionName(): string {
+    return this.activeDimension?.name ?? 'Padrão';
+  }
+
+  public getVoxelRamBytes(): number {
+    try {
+      let bytes = 0;
+      for (const chunk of this.loadedChunks.values()) {
+        if (chunk.data) {
+          if (chunk.data.blocks?.byteLength) bytes += chunk.data.blocks.byteLength;
+          if (chunk.data.waterLevels?.byteLength) bytes += chunk.data.waterLevels.byteLength;
+        }
+        if (chunk.light?.byteLength) {
+          bytes += chunk.light.byteLength;
+        }
+        if (chunk.opaqueMesh?.geometry) {
+          bytes += this.getGeometryBytes(chunk.opaqueMesh.geometry);
+        }
+        if (chunk.waterMesh?.geometry) {
+          bytes += this.getGeometryBytes(chunk.waterMesh.geometry);
+        }
+      }
+      return bytes;
+    } catch {
+      return 0;
+    }
+  }
+
+  public getEstimatedGpuMemoryBytes(): number {
+    try {
+      let bytes = 0;
+      for (const chunk of this.loadedChunks.values()) {
+        if (chunk.opaqueMesh?.geometry) {
+          bytes += this.getGeometryBytes(chunk.opaqueMesh.geometry);
+        }
+        if (chunk.waterMesh?.geometry) {
+          bytes += this.getGeometryBytes(chunk.waterMesh.geometry);
+        }
+      }
+      // Raymarch: as duas texturas do brickmap global sao o custo de GPU do mundo inteiro,
+      // e ele nao cresce com o numero de chunks carregados.
+      if (this.brickMap) {
+        bytes += this.brickMap.byteLength;
+      }
+      if (this.farBrickMap) {
+        bytes += this.farBrickMap.byteLength;
+      }
+      if (this.shadowMap) {
+        bytes += 2048 * 2048 * 4;
+      }
+      return bytes;
+    } catch {
+      return 0;
+    }
+  }
+
+  private getGeometryBytes(geom: BufferGeometry): number {
+    let bytes = 0;
+    for (const name in geom.attributes) {
+      const attr = geom.attributes[name];
+      if (attr && attr.array) {
+        bytes += attr.array.byteLength;
+      }
+    }
+    if (geom.index && geom.index.array) {
+      bytes += geom.index.array.byteLength;
+    }
+    return bytes;
+  }
+
   /** Define a nevoa em blocos; converte para unidades de voxel do mundo. */
   private setFogRange(nearBlocks: number, farBlocks: number): void {
     const s = this.voxelsPerBlock;
@@ -830,6 +1362,136 @@ export default class ProceduralWorld extends Group {
     this.weatherFogColor = color;
   }
 
+  /**
+   * 0 = seco, 1 = encharcado. Escurece e deixa especulares as faces que veem o ceu, como
+   * chuva de verdade: o clima (que vive no jogo, nao na engine) e quem decide o valor.
+   */
+  public wetness = 0;
+
+  /**
+   * Shadow map direcional. Criado sob demanda em `renderShadows`, porque ele custa um
+   * desenho extra do terreno por quadro e nem todo preset de qualidade quer pagar.
+   */
+  private shadowMap: ShadowMap | null = null;
+  private shadowEnabled = false;
+  private readonly shadowLightDir = new Vector3(0, 1, 0);
+
+  /** Liga as sombras direcionais e, opcionalmente, reconfigura o mapa. */
+  public setShadows(enabled: boolean, options?: ShadowMapOptions): void {
+    this.shadowEnabled = enabled;
+    if (enabled && !this.shadowMap) {
+      this.shadowMap = new ShadowMap({
+        radiusBlocks: 96 * this.voxelsPerBlock,
+        ...options
+      });
+      // Os chunks ja carregados precisam entrar na layer que a camera de luz enxerga.
+      for (const chunk of this.loadedChunks.values()) {
+        chunk.opaqueMesh?.layers.enable(SHADOW_LAYER);
+      }
+    }
+    if (options && this.shadowMap) {
+      if (options.resolution !== undefined) this.shadowMap.setResolution(options.resolution);
+      if (options.radiusBlocks !== undefined) {
+        this.shadowMap.setRadius(options.radiusBlocks * this.voxelsPerBlock);
+      }
+      if (options.strength !== undefined) this.shadowMap.setStrength(options.strength);
+      if (options.softness !== undefined) this.shadowMap.setSoftness(options.softness);
+      if (options.angleStepDegrees !== undefined) {
+        this.shadowMap.setAngleStep(options.angleStepDegrees);
+      }
+      if (options.snapToTexel !== undefined) {
+        this.shadowMap.setSnapToTexel(options.snapToTexel);
+      }
+    }
+    if (!enabled) {
+      for (const mat of [this.opaqueMaterial, this.waterMaterial]) {
+        mat.uniforms.uShadowStrength.value = 0;
+      }
+    }
+  }
+
+  public get shadowsEnabled(): boolean {
+    return this.shadowEnabled;
+  }
+
+  /**
+   * Desenha o shadow map deste quadro e publica a matriz nos materiais de chunk.
+   * Precisa ser chamado antes de desenhar a cena, e recebe a cena porque a camera de luz
+   * atravessa a mesma arvore (filtrada pela `SHADOW_LAYER`).
+   */
+  public renderShadows(renderer: WebGLRenderer, scene: Scene): void {
+    if (!this.shadowEnabled || !this.shadowMap) return;
+
+    this.getShadowLightDirection(this.shadowLightDir);
+    this.shadowMap.render(renderer, scene, this.camera, this.shadowLightDir, this.elapsedTime);
+
+    const map = this.shadowMap;
+    // A sombra se apaga junto com a luz direta: sem sol a pino nao ha o que projetar, e
+    // insistir nela ao crepusculo produz sombras longas de uma fonte que ja nao ilumina.
+    // A elevacao vem da direcao JA NORMALIZADA — o `directional.position` fica a 1900
+    // unidades de distancia, e usar o seu y cru deixa a escala do fade dependendo de um
+    // raio de orbita que nao tem nada a ver com iluminacao.
+    // O limiar de 0.10 (~6 graus de elevacao) e o ponto em que um unico mapa ortografico
+    // ainda tem precisao: mais rasante que isso, o alcance de profundidade ao longo da luz
+    // explode e a sombra vira listras de bias. Perde-se a sombra nos ultimos graus do
+    // poente — o preco de nao ter cascatas.
+    const lightUp = Math.max(0, this.shadowLightDir.y);
+    const grazing = Math.min(1, lightUp / 0.10);
+    const strength = map.strength * grazing * this.sky.daylight;
+    for (const mat of [this.opaqueMaterial, this.waterMaterial]) {
+      const u = mat.uniforms;
+      u.uShadowMap.value = map.texture;
+      u.uShadowMatrix.value.copy(map.matrix);
+      u.uShadowTexel.value.copy(map.texelSize);
+      u.uShadowNormalBias.value = map.normalBias;
+      u.uShadowRadius.value = (map.camera.right - map.camera.left) * 0.5;
+      u.uShadowSoftness.value = map.softness;
+      u.uShadowDepthRange.value = map.depthRange;
+      u.uShadowStrength.value = strength;
+    }
+  }
+
+  public setWetness(amount: number): void {
+    this.wetness = Math.max(0, Math.min(1, amount));
+  }
+
+  /** Direcao da camera para o sol, normalizada. Para os passes de tela. */
+  public getSunDirection(target: Vector3): Vector3 {
+    const sun = this.sky.directional.position;
+    if (!Number.isFinite(sun.x) || sun.lengthSq() < 1e-4) return target.set(0, 1, 0);
+    return target.copy(sun).normalize();
+  }
+
+  /**
+   * Direcao da fonte de luz dominante: o sol de dia, a lua de noite. E o equivalente do
+   * `shadowLightPosition` do contrato de shaders do Minecraft, e e o que os passes de
+   * tela devem usar — a direcao do sol sozinha aponta para baixo do horizonte a noite, e
+   * os raios volumetricos passariam a marchar na direcao de uma fonte enterrada.
+   */
+  public getShadowLightDirection(target: Vector3): Vector3 {
+    const sun = this.sky.directional.position;
+    if (!Number.isFinite(sun.x) || sun.lengthSq() < 1e-4) return target.set(0, 1, 0);
+    const dir = target.copy(sun).normalize();
+    return sun.y >= 0 ? dir : dir.negate();
+  }
+
+  /** Cor da luz direta (sol ou lua) deste quadro, com a intensidade aplicada. */
+  public getSunLightColor(target: Color): Color {
+    return target.copy(this.sky.directional.color)
+      .multiplyScalar(Math.max(0.12, this.sky.directional.intensity));
+  }
+
+  /** Cor da atmosfera usada na nevoa deste quadro (ja considera clima e dimensao). */
+  public getAtmosphereColor(target: Color): Color {
+    return target.copy(this.opaqueMaterial.uniforms.uSkyColor.value as Color);
+  }
+
+  public disposeShadows(): void {
+    this.shadowMap?.dispose();
+    this.shadowMap = null;
+    this.shadowEnabled = false;
+  }
+
   public setStormChoppiness(amount: number): void {
     this.stormChoppiness = Math.max(0, Math.min(1.0, amount));
     if (this.waterMaterial.uniforms.uStormChoppiness) {
@@ -838,18 +1500,7 @@ export default class ProceduralWorld extends Group {
   }
 
   tick(delta: number = 16.6667): void {
-    if (this.raymarchTemplate) {
-      const u = this.raymarchTemplate.uniforms;
-      u.uSunDirection.value.copy(this.sky.directional.position).normalize();
-      u.uDaylight.value = this.sky.daylight;
-      u.uMinLight.value = this.activeDimension.atmosphere.minLight ?? 0.03;
-      u.uSkyColor.value.copy(this.opaqueMaterial.uniforms.uSkyColor.value);
-      u.uFogNear.value = this.opaqueMaterial.uniforms.uFogNear.value;
-      u.uFogFar.value = this.opaqueMaterial.uniforms.uFogFar.value;
-      u.uDebugSteps.value = this.raymarchDebugSteps ? 1.0 : 0.0;
-      // A projecao muda com resize e com o FOV do sprint, entao e copiada por frame.
-      u.uProjection.value.copy(this.camera.projectionMatrix);
-    }
+    this.updateRaymarchFrame();
 
     [this.opaqueMaterial, this.waterMaterial].forEach(mat => {
         mat.uniforms.uTime.value = this.elapsedTime;
@@ -869,6 +1520,15 @@ export default class ProceduralWorld extends Group {
         mat.uniforms.uSunDirection.value.copy(this.sky.directional.position).normalize();
         mat.uniforms.uDaylight.value = this.sky.daylight;
         mat.uniforms.uMinLight.value = this.activeDimension.atmosphere.minLight ?? 0.03;
+        // A cor da luz vem do ceu, nao de constantes: e o que faz o terreno acompanhar o
+        // poente e o crepusculo sem nenhuma regra por hora do dia no shader.
+        mat.uniforms.uSunColor.value
+          .copy(this.sky.directional.color)
+          .multiplyScalar(Math.max(0.12, this.sky.directional.intensity));
+        mat.uniforms.uAmbientColor.value
+          .copy(this.sky.ambient.color)
+          .multiplyScalar(Math.max(0.12, this.sky.ambient.intensity));
+        mat.uniforms.uWetness.value = this.wetness;
         if (this.activeDimension.atmosphere.alwaysLit) {
             mat.uniforms.uShadersEnabled.value = 1.0;
         }
@@ -916,11 +1576,15 @@ export default class ProceduralWorld extends Group {
         // 3. Update Entities
         this.entityManager.update(delta);
 
-        // 4. Update Water Scalar Field Physics (~12 ticks/sec)
-        this.waterTickTimer += delta;
-        if (this.waterTickTimer >= 80) {
+        // 4. Update Water Physics (Cellular Automata or Scalar Field)
+        if (this.fluidMode === 'cellular_automata') {
+          this.fluidCA.update(delta);
+        } else if (this.fluidMode === 'scalar') {
+          this.waterTickTimer += delta;
+          if (this.waterTickTimer >= 80) {
             this.waterTickTimer = 0;
             this.tickWaterPhysics();
+          }
         }
     }
 
@@ -950,7 +1614,8 @@ export default class ProceduralWorld extends Group {
 
     // 0b. Despacho de geracao, tambem com orcamento.
     const requestStart = performance.now();
-    while (this.requestQueue.length > 0 && (performance.now() - requestStart) < 2.0) {
+    const requestLimit = this.chunkRenderer === 'raymarch' ? 5.0 : 2.0;
+    while (this.requestQueue.length > 0 && (performance.now() - requestStart) < requestLimit) {
       const key = this.requestQueue.pop()!;   // a fila esta ordenada do mais longe para o mais perto
       if (!this.loadedChunks.has(key) && !this.pendingChunks.has(key)) this.requestChunk(key);
     }
@@ -1069,11 +1734,13 @@ export default class ProceduralWorld extends Group {
 
     const mesh = new Mesh(geometry, material);
     mesh.frustumCulled = true;
+    // So o terreno opaco projeta sombra. A agua e transparente e o ceu cobriria tudo.
+    if (material === this.opaqueMaterial) mesh.layers.enable(SHADOW_LAYER);
     return mesh;
   }
 
   private destroyChunkMeshes(chunk: LoadedChunk): void {
-    this.disposeRaymarchChunk(chunk);
+    this.unpublishChunk(chunk);
     if (chunk.opaqueMesh) {
         chunk.opaqueMesh.geometry.dispose();
         this.remove(chunk.opaqueMesh);
@@ -1112,6 +1779,7 @@ export default class ProceduralWorld extends Group {
     chunk.hasAnimated = true;
     chunk.animationStartTime = -10.0;
 
+    const oldType = chunk.data.blocks[idx];
     chunk.data.blocks[idx] = blockType;
     if (!chunk.data.waterLevels) {
       chunk.data.waterLevels = new Uint8Array(chunk.data.blocks.length).fill(0);
@@ -1154,6 +1822,20 @@ export default class ProceduralWorld extends Group {
 
     this.light.queueEdit(chunk, idx);
     this.light.flushEdits();
+
+    if (this.fluidCA && this.fluidMode === 'cellular_automata') {
+      if (this.fluidCA.isSpring(oldType)) {
+        this.fluidCA.removeSpring(bx, by, bz);
+      }
+      if (this.fluidCA.isSpring(blockType)) {
+        this.fluidCA.addSpring(bx, by, bz);
+      }
+      if (blockRegistry.isFluid(blockType)) {
+        this.fluidCA.wakeVoxel(bx, by, bz);
+      } else {
+        this.fluidCA.wakeNeighbors(bx, by, bz);
+      }
+    }
 
     this.asyncRebuild(key, chunk);
     this.rebuildAdjacentChunks(bx, by, bz, chunk.data);
@@ -1270,7 +1952,7 @@ export default class ProceduralWorld extends Group {
     }
   }
 
-  destroyBlock(point: Vector3, normal: Vector3): void {
+  destroyBlock(point: { x: number; y: number; z: number }, normal: { x: number; y: number; z: number }): void {
     const bx = Math.floor(point.x - normal.x * 0.5);
     const by = Math.floor(point.y - normal.y * 0.5);
     const bz = Math.floor(point.z - normal.z * 0.5);
@@ -1282,6 +1964,9 @@ export default class ProceduralWorld extends Group {
     const current = this.getBlock(bx, by, bz);
     if (!blockRegistry.isSolid(current)) return false;
     this.setBlockAt(bx, by, bz, -1);
+    if (this.fluidCA && this.fluidMode === 'cellular_automata') {
+      this.fluidCA.wakeNeighbors(bx, by, bz);
+    }
     return true;
   }
 
@@ -1297,7 +1982,7 @@ export default class ProceduralWorld extends Group {
    * Retorna o que foi alterado, com o tipo que estava ali antes.
    */
   public editSphere(
-    center: Vector3,
+    center: { x: number; y: number; z: number },
     radius: number,
     mode: SphereEditMode = 'destroy',
     blockType: number = AIR
@@ -1395,6 +2080,24 @@ export default class ProceduralWorld extends Group {
 
     this.light.flushEdits();
 
+    // Notifica o simulador de fluidos para acordar os voxels colocados ou perturbados
+    if (this.fluidCA && this.fluidMode === 'cellular_automata') {
+      const isSpringNew = this.fluidCA.isSpring(newType);
+      for (const c of changed) {
+        if (this.fluidCA.isSpring(c.blockType)) {
+          this.fluidCA.removeSpring(c.pos.x, c.pos.y, c.pos.z);
+        }
+        if (isSpringNew) {
+          this.fluidCA.addSpring(c.pos.x, c.pos.y, c.pos.z);
+        }
+        if (newIsFluid) {
+          this.fluidCA.wakeVoxel(c.pos.x, c.pos.y, c.pos.z);
+        } else {
+          this.fluidCA.wakeNeighbors(c.pos.x, c.pos.y, c.pos.z);
+        }
+      }
+    }
+
     // Rebuild em lote de todos os chunks afetados
     for (const [key, chunk] of modifiedChunks) {
       this.asyncRebuild(key, chunk);
@@ -1409,6 +2112,83 @@ export default class ProceduralWorld extends Group {
     return changed;
   }
 
+  /**
+   * Fast block update for batch simulation passes (such as Cellular Automata).
+   * Materializes the chunk if shared, updates voxels, updates borders, and records
+   * the dirty chunk keys without triggering immediate expensive mesh/texture rebuilds.
+   */
+  public setBlockFast(
+    bx: number,
+    by: number,
+    bz: number,
+    type: number,
+    dirtyKeys?: Set<string>,
+    borderAdjKeys?: Set<string>
+  ): boolean {
+    const key = this.keyForBlock(bx, by, bz);
+    const chunk = this.loadedChunks.get(key);
+    if (!chunk) return false;
+
+    this.materializeBlocks(chunk);
+    const s = this.chunkSize;
+    const lx = bx - chunk.data.startX;
+    const ly = by - chunk.data.startY;
+    const lz = bz - chunk.data.startZ;
+    if (lx < 0 || lx >= s || ly < 0 || ly >= s || lz < 0 || lz >= s) return false;
+
+    const idx = ly * s * s + lz * s + lx;
+    chunk.data.blocks[idx] = type;
+    if (chunk.data.waterLevels) {
+      chunk.data.waterLevels[idx] = blockRegistry.isFluid(type) ? 255 : 0;
+    }
+
+    if (lx === 0 && chunk.borders.negX) {
+      chunk.borders.negX[ly * s + lz] = type;
+      borderAdjKeys?.add(this.chunkKey(chunk.data.startX - s, chunk.data.startY, chunk.data.startZ));
+    }
+    if (lx === s - 1 && chunk.borders.posX) {
+      chunk.borders.posX[ly * s + lz] = type;
+      borderAdjKeys?.add(this.chunkKey(chunk.data.startX + s, chunk.data.startY, chunk.data.startZ));
+    }
+    if (ly === 0 && chunk.borders.negY) {
+      chunk.borders.negY[lz * s + lx] = type;
+      borderAdjKeys?.add(this.chunkKey(chunk.data.startX, chunk.data.startY - s, chunk.data.startZ));
+    }
+    if (ly === s - 1 && chunk.borders.posY) {
+      chunk.borders.posY[lz * s + lx] = type;
+      borderAdjKeys?.add(this.chunkKey(chunk.data.startX, chunk.data.startY + s, chunk.data.startZ));
+    }
+    if (lz === 0 && chunk.borders.negZ) {
+      chunk.borders.negZ[ly * s + lx] = type;
+      borderAdjKeys?.add(this.chunkKey(chunk.data.startX, chunk.data.startY, chunk.data.startZ - s));
+    }
+    if (lz === s - 1 && chunk.borders.posZ) {
+      chunk.borders.posZ[ly * s + lx] = type;
+      borderAdjKeys?.add(this.chunkKey(chunk.data.startX, chunk.data.startY, chunk.data.startZ + s));
+    }
+
+    dirtyKeys?.add(key);
+    return true;
+  }
+
+  /**
+   * Rebuild all chunks modified by batch simulation in a single coordinated pass.
+   */
+  public flushDirtyChunks(dirtyKeys: Set<string>, borderAdjKeys?: Set<string>): void {
+    for (const key of dirtyKeys) {
+      const chunk = this.loadedChunks.get(key);
+      if (chunk) this.asyncRebuild(key, chunk);
+    }
+    if (borderAdjKeys) {
+      for (const adjKey of borderAdjKeys) {
+        if (!dirtyKeys.has(adjKey)) {
+          const adjChunk = this.loadedChunks.get(adjKey);
+          if (adjChunk) this.asyncRebuild(adjKey, adjChunk);
+        }
+      }
+    }
+  }
+
   /** Remove todos os solidos de uma esfera. Atalho de `editSphere(..., 'destroy')`. */
   destroySphere(center: Vector3, radius: number): Array<{ pos: Vector3; blockType: number }> {
     return this.editSphere(center, radius, 'destroy');
@@ -1418,7 +2198,7 @@ export default class ProceduralWorld extends Group {
     return this.entityManager;
   }
 
-  addBlock(point: Vector3, normal: Vector3, blockType: number): void {
+  addBlock(point: { x: number; y: number; z: number }, normal: { x: number; y: number; z: number }, blockType: number): void {
     // Offset by +0.5 along normal to get to the empty space next to the hit face
     const bx = Math.floor(point.x + normal.x * 0.5);
     const by = Math.floor(point.y + normal.y * 0.5);
@@ -1447,6 +2227,48 @@ export default class ProceduralWorld extends Group {
       return b !== -1 && blockRegistry.isSolid(b);
   }
 
+  /** True quando o chunk que contem esse voxel ja esta carregado. */
+  public isColumnLoaded(bx: number, by: number, bz: number): boolean {
+    return this.loadedChunks.has(this.keyForBlock(bx, by, bz));
+  }
+
+  /**
+   * Topo solido e seco da coluna `(bx, bz)`, em voxels, ou `null`.
+   *
+   * `null` cobre tres casos que, para quem procura um lugar de nascer, dao no mesmo: a
+   * coluna ainda nao chegou dos workers, o topo dela esta submerso, ou o topo nao e solido.
+   * Em qualquer um deles a resposta e procurar em outro lugar.
+   *
+   * A varredura e por CHUNK, e nao por voxel: o teste de "carregado" e uma busca em Map, e
+   * fazer uma por voxel ao longo de centenas de metros de coluna custaria mais que o resto
+   * do tick. Dentro de um chunk carregado, os voxels sao lidos direto do array.
+   */
+  public drySurfaceAt(bx: number, bz: number, topY: number, bottomY: number): number | null {
+    const size = this.chunkSize;
+    const topChunk = Math.floor(topY / size);
+    const bottomChunk = Math.floor(bottomY / size);
+    let sawLoaded = false;
+
+    for (let cy = topChunk; cy >= bottomChunk; cy--) {
+      const baseY = cy * size;
+      if (!this.isColumnLoaded(bx, baseY, bz)) {
+        // Antes de entrar na faixa carregada e normal; depois de sair dela, acabou.
+        if (sawLoaded) return null;
+        continue;
+      }
+      sawLoaded = true;
+
+      const from = Math.min(topY, baseY + size - 1);
+      for (let y = from; y >= baseY; y--) {
+        const b = this.getBlock(bx, y, bz);
+        if (b === AIR) continue;
+        if (blockRegistry.isFluid(b)) return null;        // topo submerso
+        return blockRegistry.isSolid(b) ? y : null;
+      }
+    }
+    return null;
+  }
+
   /**
    * Passo de LOD de um chunk, pela distancia ate a camera. Sem aneis configurados, sempre 1.
    */
@@ -1473,7 +2295,7 @@ export default class ProceduralWorld extends Group {
     const radiusSq = this.renderDistance * this.renderDistance;
     
     // Dynamic vertical range around player position (supporting deep underground downwards)
-    const minCy = Math.max(this.chunkYMin, cy - this.verticalRenderDistance);
+    const minCy = Math.max(this.chunkYMin, cy - this.verticalRenderDistanceDown);
     const maxCy = Math.min(this.chunkYMax, cy + this.verticalRenderDistance);
 
     for (let dx = -this.renderDistance; dx <= this.renderDistance; dx++) {
@@ -1533,28 +2355,30 @@ export default class ProceduralWorld extends Group {
         startX, endX: startX + this.chunkSize, 
         startY, endY: startY + this.chunkSize, 
         startZ, endZ: startZ + this.chunkSize,
-        worldParams: this.params, voxelsPerBlock: this.voxelsPerBlock, neighbourBorderBlocks: this.getNeighbourBorderBlocks(startX, startY, startZ),
-        computeLight: true,
+        worldParams: this.params, voxelsPerBlock: this.voxelsPerBlock,
+        neighbourBorderBlocks: {}, // Na criacao inicial nao precisa de bordas (buildMesh=false)
+        computeLight: this.chunkRenderer !== 'raymarch',
         presumeSky: this.presumesSky(startY),
-        buildMesh: false // We only want terrain data first!
+        buildMesh: false, // We only want terrain data first!
+        greedyMeshing: this.greedyMeshing
       },
       (response) => this.onChunkReady(response),
     );
   }
 
-  private sharedBlocksFor(value: number): Int8Array {
+  private sharedBlocksFor(value: number): Int16Array {
     let arr = this.sharedBlocksByValue.get(value);
     if (!arr) {
-      arr = new Int8Array(this.chunkSize ** 3).fill(value);
+      arr = new Int16Array(this.chunkSize ** 3).fill(value);
       this.sharedBlocksByValue.set(value, arr);
     }
     return arr;
   }
 
-  private sharedSliceFor(value: number): Int8Array {
+  private sharedSliceFor(value: number): Int16Array {
     let arr = this.sharedSliceByValue.get(value);
     if (!arr) {
-      arr = new Int8Array(this.chunkSize ** 2).fill(value);
+      arr = new Int16Array(this.chunkSize ** 2).fill(value);
       this.sharedSliceByValue.set(value, arr);
     }
     return arr;
@@ -1579,11 +2403,11 @@ export default class ProceduralWorld extends Group {
   private materializeBlocks(chunk: LoadedChunk): void {
     if (!chunk.sharedBlocks) return;
     chunk.sharedBlocks = false;
-    chunk.data.blocks = new Int8Array(chunk.data.blocks);
+    chunk.data.blocks = new Int16Array(chunk.data.blocks);
     chunk.data.waterLevels = new Uint8Array(chunk.data.waterLevels);
     for (const key of ['negX', 'posX', 'negY', 'posY', 'negZ', 'posZ'] as const) {
       const slice = chunk.borders[key];
-      if (slice) chunk.borders[key] = new Int8Array(slice);
+      if (slice) chunk.borders[key] = new Int16Array(slice);
     }
   }
 
@@ -1626,6 +2450,19 @@ export default class ProceduralWorld extends Group {
         chunk.beforeLightWrite = () => this.materializeLight(chunk);
 
         this.loadedChunks.set(response.chunkKey, chunk);
+
+        // Escaneia fluidos naturais gerados no chunk para simulação por autômato celular
+        if (this.fluidCA && this.fluidMode === 'cellular_automata' && !chunk.sharedBlocks) {
+          this.fluidCA.scanChunk(chunk.data);
+        }
+
+        if (this.chunkRenderer === 'raymarch') {
+          // No raymarch, a textura 3D e o shader cuidam da iluminacao em tempo real.
+          // Desenha instantaneamente sem atraso na fila de costura de luz!
+          this.publishChunk(chunk);
+          return;
+        }
+
         const [, cy] = this.decodeKey(response.chunkKey);
         // Costura adiada para o laco orcado de `tick`: ela roda na thread que renderiza, e
         // varios chunks podem chegar no mesmo quadro.
@@ -1642,9 +2479,10 @@ export default class ProceduralWorld extends Group {
   /** Enfileira a malha do chunk e dos seis vizinhos, depois que a luz dele foi costurada. */
   private afterChunkStitched(key: string): void {
     if (this.chunkRenderer === 'raymarch') {
-      // Sem malha e sem roundtrip de worker: a textura 3D E o dado do chunk.
       const chunk = this.loadedChunks.get(key);
-      if (chunk) this.applyRaymarchChunk(chunk);
+      if (chunk) {
+        this.publishChunk(chunk);
+      }
       return;
     }
 
@@ -1670,66 +2508,124 @@ export default class ProceduralWorld extends Group {
         this.destroyChunkMeshes(chunk);
         this.light.unlink(chunk);
         this.loadedChunks.delete(key);
+        if (this.chunkRenderer === 'raymarch') {
+          this.unpublishChunk(chunk);
+        }
     }
     this.staleRebuildChunks.delete(key);
     if (this.lastChunkKey === key) { this.lastChunk = null; this.lastChunkKey = null; }
   }
 
   /**
-   * Cria ou atualiza a caixa de raymarch de um chunk.
+   * Estado por quadro do raymarch global: atmosfera, janela residente e camera.
    *
-   * Chunk uniforme de ar nao desenha nada: e a maioria do mundo, e uma caixa transparente por
-   * chunk de ceu custaria um draw call para descartar todos os fragmentos.
+   * Sao poucos uniforms porque sao os uniforms do MUNDO, nao de um chunk. A versao por chunk
+   * tinha que redirecionar 15 deles por referencia em cada clone de material para nao pagar
+   * 28.000 copias por quadro; aqui o problema nao existe.
    */
-  private applyRaymarchChunk(chunk: LoadedChunk): void {
-    if (chunk.sharedBlocks && chunk.data.blocks[0] === AIR) {
-      this.disposeRaymarchChunk(chunk);
+  private updateRaymarchFrame(): void {
+    const pass = this.raymarchPass;
+    if (!pass) return;
+
+    const u = pass.material.uniforms;
+    u.uSunDirection.value.copy(this.sky.directional.position).normalize();
+    u.uDaylight.value = this.sky.daylight;
+    u.uMinLight.value = this.activeDimension.atmosphere.minLight ?? 0.025;
+    u.uSkyColor.value.copy(this.opaqueMaterial.uniforms.uSkyColor.value);
+    u.uSunColor.value.copy(this.opaqueMaterial.uniforms.uSunColor.value);
+    u.uAmbientColor.value.copy(this.opaqueMaterial.uniforms.uAmbientColor.value);
+    u.uFogNear.value = this.opaqueMaterial.uniforms.uFogNear.value;
+    u.uFogFar.value = this.opaqueMaterial.uniforms.uFogFar.value;
+
+    // A janela anda em passo de CHUNK, nao de brick. Em passo de brick a caixa de um chunk
+    // poderia cruzar a emenda do toro, e o upload de um chunk deixaria de caber num unico
+    // texSubImage3D (ver GlobalBrickMap).
+    const cb = this.chunkSize / BRICK;
+    const halfX = Math.floor(pass.windowBricksX / cb / 2);
+    const halfZ = Math.floor(pass.windowBricksZ / cb / 2);
+    const pcx = Math.floor(this.camera.position.x / this.chunkSize);
+    const pcy = Math.floor(this.camera.position.y / this.chunkSize);
+    const pcz = Math.floor(this.camera.position.z / this.chunkSize);
+    // Em Y a janela nao e centrada: ela acompanha a faixa carregada, que vai mais fundo do
+    // que sobe. Centrada, metade dela ficaria sobre ceu vazio e o fundo seria recortado.
+    const originCy = pcy - Math.min(this.verticalRenderDistanceDown, this.chunkYMax - this.chunkYMin) - 1;
+    pass.setWindowOriginBrick((pcx - halfX) * cb, originCy * cb, (pcz - halfZ) * cb);
+
+    pass.setDebugSteps(this.raymarchDebugSteps);
+    // A camera nao e lida aqui: ver o `onBeforeRender` em GlobalRaymarchPass.
+
+    const farPass = this.farPass;
+    const farMap = this.farBrickMap;
+    if (farPass && farMap) {
+      const fu = farPass.material.uniforms;
+      for (const name of [
+        'uSunDirection', 'uSunColor', 'uSkyColor', 'uAmbientColor'
+      ] as const) {
+        fu[name].value.copy(u[name].value);
+      }
+      fu.uDaylight.value = u.uDaylight.value;
+      fu.uMinLight.value = u.uMinLight.value;
+      fu.uFogNear.value = u.uFogNear.value;
+      fu.uFogFar.value = u.uFogFar.value;
+      farPass.setDebugSteps(this.raymarchDebugSteps);
+
+      // A janela do anel distante e centrada na camera e alinhada ao chunk DELE.
+      const fw = farMap.chunkBricks;
+      const cellsPerChunk = farMap.chunkBricks * BRICK * farMap.voxelScale;
+      const pcx = Math.floor(this.camera.position.x / cellsPerChunk);
+      const pcy = Math.floor(this.camera.position.y / cellsPerChunk);
+      const pcz = Math.floor(this.camera.position.z / cellsPerChunk);
+      const halfX = Math.floor(farPass.windowBricksX / fw / 2);
+      const halfY = Math.floor(farPass.windowBricksY / fw / 2);
+      const halfZ = Math.floor(farPass.windowBricksZ / fw / 2);
+      farPass.setWindowOriginBrick(
+        (pcx - halfX) * fw, (pcy - halfY) * fw, (pcz - halfZ) * fw
+      );
+
+      this.farStreamer?.update(
+        this.camera.position.x, this.camera.position.y, this.camera.position.z
+      );
+    }
+  }
+
+  /**
+   * Publica um chunk no brickmap global.
+   *
+   * Substitui o `applyRaymarchChunk` antigo, que criava uma caixa, um material clonado, uma
+   * textura 3D de voxels e uma de macro-grade POR CHUNK. Aqui nao nasce objeto nenhum: os
+   * voxels sao copiados para as duas texturas globais e o chunk deixa de existir como coisa
+   * desenhavel. Foi isso que tirou ~28.000 draw calls do quadro.
+   *
+   * Chunk uniforme de ar nao e publicado: ele e a maioria do mundo e o texel zero da
+   * indirecao ja o representa.
+   */
+  private publishChunk(chunk: LoadedChunk): void {
+    const brickMap = this.brickMap;
+    if (!brickMap) return;
+
+    if (!brickMap.isAttached) {
+      // Ainda sem renderer. Ver `pendingBrickUploads`.
+      if (!chunk.inBrickMap) {
+        chunk.inBrickMap = true;
+        this.pendingBrickUploads.push(chunk);
+      }
       return;
     }
 
-    if (!this.raymarchTemplate) {
-      this.raymarchTemplate = createVoxelRaymarchMaterial(this.chunkSize);
-      this.paletteTexture = createPaletteTexture();
-      const u = this.raymarchTemplate.uniforms;
-      u.uPalette.value = this.paletteTexture;
-      u.uVoxelEdge.value = this.voxelEdge;
-      u.uVoxelGrain.value = this.voxelGrain;
-      u.uVoxelEdgeFade.value = this.voxelEdgeFadeBlocks * this.voxelsPerBlock;
-      u.uDebugSteps.value = this.raymarchDebugSteps ? 1.0 : 0.0;
-    }
+    const { startX, startY, startZ, blocks } = chunk.data;
 
-    if (chunk.voxelTexture) {
-      // Edicao: o buffer e o mesmo, basta reenviar. No caminho de malha isto seria remalhar o
-      // chunk inteiro, medido em ~76 ms para um chunk 64^3.
-      chunk.voxelTexture.needsUpdate = true;
+    if (chunk.sharedBlocks && blocks[0] === AIR) {
+      if (chunk.inBrickMap) {
+        brickMap.removeChunk(chunk.key, startX, startY, startZ);
+        this.lightField?.removeChunk(chunk.key);
+        chunk.inBrickMap = false;
+      }
       return;
     }
 
-    const texture = createVoxelTexture(chunk.data.blocks, this.chunkSize);
-    const material = this.raymarchTemplate.clone();
-
-    // `clone()` copia os uniforms em profundidade. Reaponta os que sao globais para os objetos
-    // do template, por REFERENCIA: assim `tick` atualiza sol, nevoa e dia/noite uma vez, e nao
-    // uma vez por chunk carregado.
-    for (const key of RAYMARCH_SHARED_UNIFORMS) {
-      material.uniforms[key] = this.raymarchTemplate.uniforms[key];
-    }
-
-    material.uniforms.uVoxels = { value: texture };
-    material.uniforms.uChunkOrigin = {
-      value: new Vector3(chunk.data.startX, chunk.data.startY, chunk.data.startZ)
-    };
-
-    const half = this.chunkSize / 2;
-    const mesh = new Mesh(this.raymarchBox(), material);
-    mesh.position.set(
-      chunk.data.startX + half, chunk.data.startY + half, chunk.data.startZ + half
-    );
-    mesh.frustumCulled = true;
-
-    chunk.voxelTexture = texture;
-    chunk.raymarchMesh = mesh;
-    this.add(mesh);
+    brickMap.uploadChunk(chunk.key, startX, startY, startZ, blocks);
+    this.lightField?.scanChunk(chunk.key, startX, startY, startZ, blocks, this.chunkSize);
+    chunk.inBrickMap = true;
 
     if (!chunk.readyNotified) {
       chunk.readyNotified = true;
@@ -1739,28 +2635,83 @@ export default class ProceduralWorld extends Group {
     }
   }
 
-  /** Uma unica BoxGeometry compartilhada por todas as caixas de chunk. */
-  private sharedBox: BoxGeometry | null = null;
-  private raymarchBox(): BoxGeometry {
-    if (!this.sharedBox) this.sharedBox = new BoxGeometry(this.chunkSize, this.chunkSize, this.chunkSize);
-    return this.sharedBox;
+  private unpublishChunk(chunk: LoadedChunk): void {
+    if (!chunk.inBrickMap) return;
+    const { startX, startY, startZ } = chunk.data;
+    this.brickMap?.removeChunk(chunk.key, startX, startY, startZ);
+    this.lightField?.removeChunk(chunk.key);
+    chunk.inBrickMap = false;
   }
 
-  private disposeRaymarchChunk(chunk: LoadedChunk): void {
-    if (chunk.raymarchMesh) {
-      this.remove(chunk.raymarchMesh);
-      (chunk.raymarchMesh.material as ShaderMaterial).dispose();
-      chunk.raymarchMesh = null;
+  /**
+   * Entrega o renderer ao caminho de raymarch e drena o que chegou antes dele.
+   *
+   * O mundo e construido antes do primeiro quadro, mas as texturas do brickmap so podem
+   * existir depois que o three tem um contexto WebGL. O runtime chama isto uma vez.
+   */
+  public attachRenderer(renderer: WebGLRenderer): void {
+    if (!this.brickMap || this.brickMap.isAttached) return;
+
+    this.brickMap.attach(renderer);
+    this.brickMap.assertWindowCoversView(
+      this.renderDistance, this.verticalRenderDistanceDown, this.verticalRenderDistance
+    );
+
+    const far = this.farConfig;
+    if (this.farBrickMap && far) {
+      this.farBrickMap.attach(renderer);
+      // Mesma armadilha do anel fino: janela menor que o conjunto vivo faz dois chunks
+      // caírem no mesmo texel do toro, e o sintoma (terreno piscando longe) e dificil
+      // demais de rastrear para ser descoberto em runtime.
+      const farChunkWorld = far.chunkCells * far.stride;
+      this.farBrickMap.assertWindowCoversView(
+        Math.ceil(far.outerRadius / farChunkWorld),
+        Math.ceil(far.verticalRadius / farChunkWorld),
+        Math.ceil(far.verticalRadius / farChunkWorld)
+      );
+      this.farStreamer = new FarFieldStreamer(
+        {
+          chunkCells: far.chunkCells,
+          stride: far.stride,
+          innerRadius: this.renderDistance * this.chunkSize,
+          outerRadius: far.outerRadius,
+          verticalRadius: far.verticalRadius,
+          minY: this.chunkYMin * this.chunkSize,
+          maxY: (this.chunkYMax + 1) * this.chunkSize
+        },
+        this.pool, this.farBrickMap, this.params, this.voxelsPerBlock
+      );
     }
-    if (chunk.voxelTexture) {
-      chunk.voxelTexture.dispose();
-      chunk.voxelTexture = null;
+
+    const queued = this.pendingBrickUploads.splice(0, this.pendingBrickUploads.length);
+    for (const chunk of queued) {
+      chunk.inBrickMap = false;
+      this.publishChunk(chunk);
     }
   }
 
+  /** Numeros do brickmap para o relatorio de memoria e para o HUD de depuracao. */
+  public brickMapStats(): {
+    slotsUsed: number; totalSlots: number; peakSlotsUsed: number;
+    allocFailures: number; gpuBytes: number; activeLights: number;
+    farSlotsUsed: number; farTotalSlots: number; farChunks: number;
+  } | null {
+    if (!this.brickMap) return null;
+    return {
+      slotsUsed: this.brickMap.slotsUsed,
+      totalSlots: this.brickMap.totalSlots,
+      peakSlotsUsed: this.brickMap.peakSlotsUsed,
+      allocFailures: this.brickMap.allocFailures,
+      gpuBytes: this.brickMap.byteLength + (this.farBrickMap?.byteLength ?? 0),
+      activeLights: this.lightField?.activeCount ?? 0,
+      farSlotsUsed: this.farBrickMap?.slotsUsed ?? 0,
+      farTotalSlots: this.farBrickMap?.totalSlots ?? 0,
+      farChunks: this.farStreamer?.loadedCount ?? 0
+    };
+  }
   private asyncRebuild(key: string, chunk: LoadedChunk): void {
     if (this.chunkRenderer === 'raymarch') {
-      this.applyRaymarchChunk(chunk);
+      this.publishChunk(chunk);
       return;
     }
     if (this.pendingRebuildChunks.has(key)) {
@@ -1784,6 +2735,7 @@ export default class ProceduralWorld extends Group {
         neighbourBorderLight: this.light.neighborBorders(chunk),
         neighbourBorderWaterLevels: this.getNeighbourBorderWaterLevels(sx, sy, sz),
         buildMesh: true, // Rebuild jobs explicitly request the mesh
+        greedyMeshing: this.greedyMeshing,
         lodStep: lodStep
       },
       (response) => this.onRebuildReady(response),
@@ -1974,7 +2926,7 @@ export default class ProceduralWorld extends Group {
   }
 
   /** Returns true if every block in a border slice is opaque solid. */
-  private isBorderSolid(border: Int8Array | undefined): boolean {
+  private isBorderSolid(border: Int16Array | undefined): boolean {
     if (!border) return false; // neighbour not loaded = unknown, treat as open
     for (let i = 0; i < border.length; i++) {
       if (!blockRegistry.isOpaque(border[i])) return false;
@@ -2080,8 +3032,10 @@ export default class ProceduralWorld extends Group {
     const ky = Math.floor(startY / this.chunkSize);
     const kz = Math.floor(startZ / this.chunkSize);
     
-    // Outside valid world height (-512 to 144)
-    if (ky < -32 || ky > 8) return false;
+    // Fora da faixa vertical CONFIGURADA do mundo. Estava fixo em -32..8, os limites do
+    // mundo classico de chunks de 16: num mundo com outra faixa (o tiny-voxels vai de -8 a
+    // 49) isso recusava a superficie inteira.
+    if (ky < this.chunkYMin || ky > this.chunkYMax) return false;
 
     const dx = kx - this.lastPlayerChunkX;
     const dy = ky - this.lastPlayerChunkY;
@@ -2090,9 +3044,15 @@ export default class ProceduralWorld extends Group {
     // Outside horizontal bounds
     if (dx * dx + dz * dz > (this.renderDistance * margin) ** 2) return false;
     
-    // Check our two rules: Surface Pinning (ky 0..7 when near surface) or Dynamic Vertical Distance
-    const isSurfacePined = this.lastPlayerChunkY >= -2 && ky >= 0 && ky <= 7;
-    const isVerticalDesired = Math.abs(dy) <= (this.verticalRenderDistance * margin);
+    // Check our two rules: Surface Pinning or Dynamic Vertical Distance
+    const isSurfacePined =
+      this.surfacePinRange !== null &&
+      this.lastPlayerChunkY >= -2 &&
+      ky >= this.surfacePinRange[0] &&
+      ky <= this.surfacePinRange[1];
+    const isVerticalDesired =
+      dy <= this.verticalRenderDistance * margin &&
+      -dy <= this.verticalRenderDistanceDown * margin;
     
     return isSurfacePined || isVerticalDesired;
   }

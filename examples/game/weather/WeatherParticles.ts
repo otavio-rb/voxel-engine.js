@@ -55,6 +55,7 @@ export class WeatherParticles {
 
   constructor() {
     this.group.name = 'WeatherParticles';
+    this.group.renderOrder = 100;
 
     const halfX = BOX_XZ * 0.5;
     const halfY = BOX_Y * 0.5;
@@ -82,13 +83,14 @@ export class WeatherParticles {
     }
     this.rainGeom.setAttribute('position', new BufferAttribute(this.rainLinePos, 3).setUsage(DynamicDrawUsage));
     this.rainMat = new LineBasicMaterial({
-      color: 0x9bc8eb,
+      color: 0xa4d2f6,
       transparent: true,
       opacity: 0.55,
       depthWrite: false
     });
     this.rainLines = new LineSegments(this.rainGeom, this.rainMat);
     this.rainLines.frustumCulled = false;
+    this.rainLines.renderOrder = 100;
     this.group.add(this.rainLines);
 
     // ── 2. Sandstorm setup (Fine horizontal sand streaks) ──
@@ -118,6 +120,7 @@ export class WeatherParticles {
     });
     this.sandLines = new LineSegments(this.sandGeom, this.sandMat);
     this.sandLines.frustumCulled = false;
+    this.sandLines.renderOrder = 100;
     this.group.add(this.sandLines);
 
     // ── 3. Snow setup (Tiny micro-points) ──
@@ -137,6 +140,7 @@ export class WeatherParticles {
     });
     this.snowPoints = new Points(this.snowGeom, this.snowMat);
     this.snowPoints.frustumCulled = false;
+    this.snowPoints.renderOrder = 100;
     this.group.add(this.snowPoints);
   }
 
@@ -205,7 +209,7 @@ export class WeatherParticles {
         lines[i6 + 5] = bz;
       }
       this.rainGeom.attributes.position.needsUpdate = true;
-      this.rainMat.opacity = Math.min(0.65, 0.35 + rain * 0.3);
+      this.rainMat.opacity = Math.min(0.82, 0.45 + rain * 0.37);
     }
 
     // ── Update Snow ──

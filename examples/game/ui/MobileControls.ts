@@ -401,6 +401,7 @@ export default class MobileControls {
         clearInterval(timer);
         timer = null;
       }
+      this.engine.sendMouseUp(buttonIndex);
     };
 
     el.addEventListener('pointerdown', start);

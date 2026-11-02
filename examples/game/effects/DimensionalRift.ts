@@ -21,7 +21,7 @@ import {
 export interface DimensionalRiftOptions {
   position: Vector3;
   targetDimId?: string;
-  portalColor?: number;
+  accentColor?: number;
 }
 
 export class DimensionalRift extends Group {
@@ -64,7 +64,7 @@ export class DimensionalRift extends Group {
     this.position.copy(options.position);
     this.targetDimId = options.targetDimId ?? 'nether';
 
-    const baseColor = new Color(options.portalColor ?? 0x9c27b0);
+    const baseColor = new Color(options.accentColor ?? 0x9c27b0);
     const hotColor = baseColor.clone().offsetHSL(0.06, 0.3, 0.35);
     const darkColor = baseColor.clone().offsetHSL(-0.04, 0.1, -0.45);
 

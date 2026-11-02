@@ -7,6 +7,13 @@ interface Job {
   callback: JobCallback;
 }
 
+export interface WorkerPoolStats {
+  total: number;
+  idle: number;
+  busy: number;
+  queued: number;
+}
+
 /**
  * Manages a pool of Web Workers and a job queue.
  * Jobs are dispatched to idle workers; queued while all workers are busy.
@@ -20,9 +27,19 @@ export default class WorkerPool {
     for (let i = 0; i < workerCount; i++) {
       const worker = createWorker();
       worker.onmessage = (e: MessageEvent<WorkerResponse>) => this.onMessage(worker, e.data);
+      worker.onerror = (err) => console.error('[WorkerPool] Chunk Worker error:', err);
       this.workers.push(worker);
       this.idle.push(worker);
     }
+  }
+
+  public getStats(): WorkerPoolStats {
+    return {
+      total: this.workers.length,
+      idle: this.idle.length,
+      busy: this.workers.length - this.idle.length,
+      queued: this.queue.length
+    };
   }
 
   /** Enqueue a chunk generation job. Runs immediately if a worker is free. */

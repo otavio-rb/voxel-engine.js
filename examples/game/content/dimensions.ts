@@ -9,7 +9,7 @@ export function registerDimensions(): void {
     generatorId: 'standard',
     coordinateScale: 1.0,
     defaultSpawnY: 42,
-    portalColor: 0x4488ff,
+    accentColor: 0x4488ff,
     physics: {
       gravity: 0.008,
       friction: 0.9,
@@ -48,7 +48,7 @@ export function registerDimensions(): void {
     generatorId: 'nether',
     coordinateScale: 8.0, // 1 bloco no Nether = 8 blocos na Overworld
     defaultSpawnY: 34,
-    portalColor: 0x9c27b0,
+    accentColor: 0x9c27b0,
     physics: {
       gravity: 0.008,
       friction: 0.9,
@@ -88,7 +88,7 @@ export function registerDimensions(): void {
     generatorId: 'lunar',
     coordinateScale: 1.0,
     defaultSpawnY: 38,
-    portalColor: 0x88ccff,
+    accentColor: 0x88ccff,
     physics: {
       gravity: 0.0022, // ~1/4 da gravidade terrestre - saltos lunares altos e flutuantes!
       friction: 0.94,
@@ -127,7 +127,7 @@ export function registerDimensions(): void {
     generatorId: 'mercury',
     coordinateScale: 1.0,
     defaultSpawnY: 36,
-    portalColor: 0xff5500,
+    accentColor: 0xff5500,
     physics: {
       gravity: 0.0055,
       friction: 0.9,
@@ -169,7 +169,7 @@ export function registerDimensions(): void {
     generatorId: 'volcanic',
     coordinateScale: 1.0,
     defaultSpawnY: 40,
-    portalColor: 0xff2200,
+    accentColor: 0xff2200,
     physics: {
       gravity: 0.008,
       friction: 0.9,
@@ -209,7 +209,7 @@ export function registerDimensions(): void {
     generatorId: 'astral_void',
     coordinateScale: 1.0,
     defaultSpawnY: 55,
-    portalColor: 0xaa00ff,
+    accentColor: 0xaa00ff,
     physics: {
       gravity: 0.0016, // Microgravidade / flutuabilidade cósmica!
       friction: 0.96,
@@ -247,7 +247,7 @@ export function registerDimensions(): void {
     generatorId: 'cavern',
     coordinateScale: 1.0,
     defaultSpawnY: 28,
-    portalColor: 0x455a64,
+    accentColor: 0x455a64,
     physics: {
       gravity: 0.008,
       friction: 0.9,
@@ -285,7 +285,7 @@ export function registerDimensions(): void {
     generatorId: 'aether',
     coordinateScale: 1.0,
     defaultSpawnY: 88,
-    portalColor: 0xffd700, // Fenda dourada e etérea reluzente
+    accentColor: 0xffd700, // Fenda dourada e etérea reluzente
     physics: {
       gravity: 0.0052, // Gravidade celestial suave e flutuante
       friction: 0.92,

@@ -25,14 +25,14 @@ export default class WaterSimulator {
   public static readonly MIN_LEVEL = 16;
 
   /**
-   * Executa um passo de simulação do campo escalar de água no chunk.
+   * Executa um passo de simulação do campo escalar de fluidos no chunk.
    */
   public static stepChunk(
     chunkData: ChunkDataResult,
     size: number,
     world: WorldWaterAccess
   ): SimulationResult {
-    const { startX, endX, startY, endY, startZ, endZ, blocks, waterLevels } = chunkData;
+    const { startX, startY, startZ, blocks, waterLevels } = chunkData;
     let hasChanged = false;
 
     const touchedBorders = {
@@ -62,6 +62,33 @@ export default class WaterSimulator {
 
           // ── Caso 1: Célula é um fluido que escoa (ex.: água) ───────────────
           if (currentLevel > 0 && blockRegistry.flows(currentType)) {
+            const reactions = blockRegistry.getFluidReactions(currentType);
+            if (reactions) {
+              const adjCoords: Array<[number, number, number]> = [
+                [wx, wy - 1, wz],
+                [wx, wy + 1, wz],
+                [wx + 1, wy, wz],
+                [wx - 1, wy, wz],
+                [wx, wy, wz + 1],
+                [wx, wy, wz - 1]
+              ];
+              let reacted = false;
+              for (const [nx, ny, nz] of adjCoords) {
+                const nBlock = world.getBlock(nx, ny, nz);
+                const rule = reactions[nBlock];
+                if (rule) {
+                  const selfTarget = rule.selfBecomes ?? rule.otherResultBlockId ?? AIR;
+                  const neighborTarget = rule.neighborBecomes ?? rule.resultBlockId ?? AIR;
+                  world.setBlockAndWater(wx, wy, wz, selfTarget, 0);
+                  world.setBlockAndWater(nx, ny, nz, neighborTarget, 0);
+                  hasChanged = true;
+                  reacted = true;
+                  break;
+                }
+              }
+              if (reacted) continue;
+            }
+
             const blockAbove = world.getBlock(wx, wy + 1, wz);
             const levelAbove = world.getWaterLevel(wx, wy + 1, wz);
             const isFedFromAbove = (blockRegistry.isFluid(blockAbove) && levelAbove > 0);
@@ -119,7 +146,6 @@ export default class WaterSimulator {
 
             // 3. Drenagem de água corrente se a fonte foi removida
             if (!isSource && !isFedFromAbove) {
-              // Verifica se algum vizinho horizontal ainda está alimentando esta célula
               let maxNeighborLevel = 0;
               const hNeighbors = [
                 world.getWaterLevel(wx + 1, wy, wz),
